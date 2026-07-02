@@ -1,0 +1,14 @@
+## Test targets dropped in by users (see targets/README.md)
+/targets/*
+!/targets/README.md
+
+## Skill scratch/output state
+.triage-state/
+THREAT_MODEL.md
+VULN-FINDINGS.json
+VULN-FINDINGS.md
+TRIAGE.json
+TRIAGE.md
+PATCHES/
+PATCHES.md
+PATCHES.json

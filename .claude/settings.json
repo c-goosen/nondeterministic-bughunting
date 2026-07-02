@@ -1,0 +1,27 @@
+{
+  "model": "claude-fable-5",
+  "permissions": {
+    "allow": [
+      "WebFetch",
+      "Bash(rg:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(cat:*)",
+      "Bash(file:*)",
+      "Bash(jq:*)",
+      "Bash(git:*)",
+      "Bash(gh api:*)",
+      "Bash(semgrep:*)",
+      "Bash(osv-scanner:*)",
+      "Bash(grype:*)",
+      "Bash(gitleaks:*)",
+      "Bash(checkov:*)",
+      "Bash(vuln-pipeline patch:*)",
+      "Bash(rtk:*)",
+      "Bash(python3 .claude/skills/_lib/checkpoint.py:*)"
+    ]
+  }
+}
