@@ -345,6 +345,11 @@ patched — not building exploits for use elsewhere. Your focus area:
 **{focus_area}**. Other agents cover other areas; duplication is wasted
 effort.
 
+BUDGET: spend your effort reading the target source and reasoning about data
+flow, not re-reading this brief. The WHAT TO LOOK FOR / DO NOT REPORT lists
+below are a reference to consult, not a checklist to transcribe back. Keep
+your own scaffolding thin so most of your context window holds code.
+
 TARGET: {target_dir}
 TRUST BOUNDARY: {from THREAT_MODEL.md section 3, or "untrusted input → process memory"}
 
@@ -359,15 +364,34 @@ securitycontext.dev, may be empty — advisory, not verified):
 
 TASK: read the source in your focus area and identify candidate
 vulnerabilities. This is static review — do NOT build, run, or probe
-anything. Reason from the code.
+anything. Reason from the code, working in four passes:
 
-First, triage each SEMGREP SEED and SECURITY CONTEXT LEAD above: open the
-cited line, decide whether it is a true positive, and either promote it to
-a <finding> (with your own data-flow analysis and severity) or note it as a
-dismissed seed. Both sources are noisy — semgrep is pattern-based, and
-Security Context leads are LLM-written prose over real fix/CVE history —
-confirm or refute each, don't copy either blindly. Then continue hunting
-beyond the seeds; they are a floor, not a ceiling.
+PASS 1 — SEEDS. Triage each SEMGREP SEED and SECURITY CONTEXT LEAD above:
+open the cited line and either promote it to a <finding> (with your own
+data-flow analysis and severity) or note it as a dismissed seed. Both
+sources are noisy — semgrep is pattern-based, Security Context leads are
+LLM-written prose over real fix/CVE history — confirm or refute each, don't
+copy either blindly.
+
+PASS 2 — INVARIANTS. Before hunting freely, enumerate the security
+invariants this focus area must hold for the trust boundary above — the
+assumptions the code depends on (e.g. "this length is always ≤ the buffer",
+"this handler only runs post-authentication", "this value is already
+escaped"). List them briefly, then for each ask: what if it doesn't hold?
+Where could attacker-controlled input violate it? Assume the developer may
+have introduced a mistake and look for it — but only report what the code
+actually supports, never a bug you merely assumed into existence.
+
+PASS 3 — HUNT. Trace candidate vulnerabilities beyond the seeds and
+invariants; they are a floor, not a ceiling. For each finding, trace where
+untrusted input enters, what path reaches the sink, and what condition
+triggers it.
+
+PASS 4 — WHAT ELSE. Before you emit, re-read your focus area once more and
+ask "what did I skip?" — the subtler bug behind the obvious one: second-order
+data flows, edge cases in the Pass 2 invariants, or an issue masked by an
+earlier finding. Push past the first-pass results into anything you dismissed
+too quickly.
 
 REPORTING BAR: report anything with a plausible exploit path. Skip style
 concerns, best-practice gaps, and purely theoretical issues with no attack
@@ -375,7 +399,7 @@ story at all — but if you're unsure whether something is real, REPORT IT
 with a low confidence score rather than dropping it. A downstream triage
 step does the rigorous verification; your job is to not miss things.
 
-WHAT TO LOOK FOR:
+WHAT TO LOOK FOR (reference — consult, don't transcribe):
 
   MEMORY SAFETY (C/C++ and unsafe/FFI blocks) — HIGH VALUE:
   - heap-buffer-overflow / stack-buffer-overflow / global-buffer-overflow
@@ -414,9 +438,6 @@ DO NOT REPORT (common false positives — skip even if technically present):
   - outdated third-party dependency versions
 
 {if --extra <file> was given: append its contents here verbatim}
-
-For each finding you DO report, trace: where does the untrusted input
-enter, what path reaches the sink, and what condition triggers it.
 
 OUTPUT — one block per finding, nothing else:
 

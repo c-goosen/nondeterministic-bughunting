@@ -42,10 +42,12 @@ pipeline and the structured artifacts that flow between stages
   (gated on a Dockerfile), gitleaks (always-on), and checkov (gated on IaC) —
   whose results seed the existing subagent fan-out and are merged as candidate
   findings; added a `source` field and per-source/tool summary counts to the
-  output; and added `setup-tools.sh` to install the scanners. These additions
-  are original to this repo and offered under the MIT License (Copyright (c)
-  2026 Christo Goosen); the surrounding Apache-2.0 skill retains its original
-  license.
+  output; added `setup-tools.sh` to install the scanners; and restructured the
+  per-subagent review brief into four passes (seeds → invariant decomposition
+  → hunt → "what else?" escalation) with a context-budget directive, informed
+  by the methodology in §5. These additions are original to this repo and
+  offered under the MIT License (Copyright (c) 2026 Christo Goosen); the
+  surrounding Apache-2.0 skill retains its original license.
 
 ## 2. Cloudflare — security-audit skill
 
@@ -82,6 +84,21 @@ from their own upstreams under their own licenses:
 - **grype** — https://github.com/anchore/grype (Apache-2.0)
 - **gitleaks** — https://github.com/gitleaks/gitleaks (MIT)
 - **checkov** — https://github.com/bridgecrewio/checkov (Apache-2.0)
+
+## 5. Methodology references (prior art, not redistributed)
+
+No code or text from the sources below is bundled in this repo; they are
+credited as intellectual influences on the pipeline's prompting and slicing
+approach.
+
+- **Devansh — "Needle in the Haystack: LLMs for Vulnerability Research"**
+  (https://devansh.bearblog.dev/needle-in-the-haystack/). Source of the
+  "minimal persistent scaffolding, maximal targeted exploration" framing,
+  the thin-slice / per-invariant audit decomposition, context-rot budgeting,
+  and the adversarial-prompting techniques (invariant decomposition, question
+  inversion, iterative "what else?" escalation, explicit attacker modeling)
+  that inform the `vuln-scan` hunter prompts and `threat-model` CVE-pattern
+  mining.
 
 ## Compliance notes
 

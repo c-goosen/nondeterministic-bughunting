@@ -26,7 +26,7 @@ Run it by invoking the `security-audit` skill against a target codebase.
 
 ### Deterministic pre-scan
 
-The `vuln-scan` stage front-loads three external static scanners before the
+The `vuln-scan` stage front-loads five external static scanners before the
 LLM fan-out, so the agents start from real, reproducible signal:
 
 - **[semgrep](https://github.com/semgrep/semgrep)** — pattern-based SAST.
@@ -68,6 +68,29 @@ want to point these skills at — see [`targets/README.md`](targets/README.md).
 `.opencode/skills` and `.cursor/skills` are symlinks to `.claude/skills`, so
 the same skill set is available to OpenCode and Cursor as well.
 
+Re-running the pipeline through the Cursor CLI agent with a non-Anthropic
+model — e.g. **GLM 5.2** or **Kimi K2.7** — is recommended as a second pass:
+the same skills prompted through a different model surface different
+findings, which prevents single-model blind spots (and avoids burning
+Claude usage on repeat scans). From the repo root:
+
+```
+cursor-agent --model glm-5.2  "Run the security-audit skill against targets/<repo>"
+cursor-agent --model kimi-k2.7 "Run the security-audit skill against targets/<repo>"
+```
+
+(Model IDs follow whatever Cursor exposes in its `/model` picker — adjust
+to the exact slug your Cursor version lists.) Diff the resulting
+`VULN-FINDINGS.json` files, then feed the union into a single `/triage`
+pass to dedupe and validate across models.
+
+### Harness config
+
+[`.claude/settings.json`](.claude/settings.json) pins the model and
+pre-approves the read-only shell commands and scanner invocations the
+pipeline needs (semgrep, osv-scanner, grype, gitleaks, checkov, `git`,
+`gh api`, …), so an audit run doesn't stall on permission prompts.
+
 ## Sources
 
 This toolkit is a combined work built from two upstream projects. Each retains
@@ -82,3 +105,12 @@ its own license — see [`NOTICES.md`](NOTICES.md) and [`LICENSES/`](LICENSES/).
 
 The orchestrator glue (`.claude/skills/security-audit/SKILL.md`) is net-new and
 MIT-licensed. See [`NOTICES.md`](NOTICES.md) for full attribution.
+
+### Further reading
+
+- Devansh, **[_Needle in the Haystack: LLMs for Vulnerability Research_](https://devansh.bearblog.dev/needle-in-the-haystack/)**
+  — the "minimal scaffolding, maximal targeted exploration" methodology
+  (thin-slice auditing, threat-modeling from CVE history, context-rot
+  budgeting, and adversarial prompting) that informs how `threat-model` and
+  `vuln-scan` are prompted. Credited as prior art in
+  [`NOTICES.md`](NOTICES.md#5-methodology-references-prior-art-not-redistributed).
