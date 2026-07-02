@@ -1,14 +1,15 @@
 ---
-name: security-audit
+name: bughunt-security-audit
 description: >-
   End-to-end security audit orchestrator. Drives the full pipeline —
-  threat-model → vuln-scan → triage → patch — and folds the Cloudflare
-  security-audit methodology (reconnaissance, hunting, attack classes,
-  validation & reporting) into each stage. Use when asked to "run a full
-  security audit", "do a security review and fix the findings", "pen-test
+  threat-model → vuln-scan → triage → patch → payloads → report — and folds
+  the Cloudflare security-audit methodology (reconnaissance, hunting, attack
+  classes, validation & reporting) into each stage. Use when asked to "run a
+  full security audit", "do a security review and fix the findings", "pen-test
   this codebase end to end", or "find and patch vulnerabilities". Produces a
   threat model, validated findings, a human report, machine-readable
-  findings.json, and candidate patches.
+  findings.json, candidate patches, authorized test payloads, and a
+  self-contained HTML report (index.html).
 ---
 
 <!--
@@ -29,16 +30,22 @@ description: >-
 # Security Audit (orchestrator)
 
 You are running a **complete security audit** of a codebase, from attack-surface
-mapping through candidate fixes. This skill is the conductor: it sequences four
-specialist skills and applies a battle-tested manual-audit methodology at each
-step.
+mapping through candidate fixes, test payloads, and a shareable HTML report. This skill
+is the conductor: it sequences **seven** specialist skills and applies a battle-tested
+manual-audit methodology at each step.
+
+**An audit run is not complete until Phase 7 writes `<output-dir>/index.html`.**
+Phases 1–6 produce the machine artifacts; Phase 7 renders the shareable HTML
+report (dark-themed, self-contained — visual reference:
+`~/security-audit-skill/openclaw/run-1/index.html`; generator:
+`../bughunt-audit-report/generate-report.py`).
 
 This skill combines two upstream sources (see [/NOTICES.md](../../../NOTICES.md)):
 
-- **Methodology** — Cloudflare's `security-audit` skill (MIT). The sibling files in
+- **Methodology** — Cloudflare's `bughunt-security-audit` skill (MIT). The sibling files in
   this directory are vendored verbatim and define *how to hunt and validate*.
-- **Pipeline** — Anthropic's defending-code skills (Apache-2.0): `threat-model`,
-  `vuln-scan`, `triage`, `patch` (in `../`). These define *the staged artifacts
+- **Pipeline** — Anthropic's defending-code skills (Apache-2.0): `bughunt-threat-model`,
+  `bughunt-vuln-scan`, `bughunt-triage`, `bughunt-patch` (in `../`). These define *the staged artifacts
   and hand-offs*.
 
 The core conviction from the Cloudflare methodology governs everything: **only
@@ -72,22 +79,24 @@ Establish two paths before starting:
 If prior runs exist for this repo, read their `findings.json` / `TRIAGE.json`
 first: skip known findings, target gaps, and resolve prior disagreements.
 
-**Install the deterministic scanners once** (used by Phase 2 / `vuln-scan`):
+**Install the deterministic scanners once** (used by Phase 2 / `bughunt-vuln-scan`):
 
 ```
-bash ../vuln-scan/setup-tools.sh --check   # status
-bash ../vuln-scan/setup-tools.sh           # install semgrep, osv-scanner, grype
+bash ../bughunt-vuln-scan/setup-tools.sh --check   # status
+bash ../bughunt-vuln-scan/setup-tools.sh           # install semgrep, osv-scanner, grype
 ```
 
 ## How the two sources align
 
 | Phase | Methodology (Cloudflare, this dir) | Pipeline stage (Anthropic, `../`) | Primary artifact |
 |---|---|---|---|
-| 1. Recon | [RECONNAISSANCE.md](RECONNAISSANCE.md) | `threat-model` | `THREAT_MODEL.md`, `architecture.md` |
-| 2. Hunt | [HUNTING.md](HUNTING.md), [ATTACK-CLASSES.md](ATTACK-CLASSES.md) | `vuln-scan` | `VULN-FINDINGS.json` |
-| 3. Validate | [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md) §Phase 3 | `triage` | `TRIAGE.json` |
+| 1. Recon | [RECONNAISSANCE.md](RECONNAISSANCE.md) | `bughunt-threat-model` | `THREAT_MODEL.md`, `architecture.md` |
+| 2. Hunt | [HUNTING.md](HUNTING.md), [ATTACK-CLASSES.md](ATTACK-CLASSES.md) | `bughunt-vuln-scan` | `VULN-FINDINGS.json` |
+| 3. Validate | [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md) §Phase 3 | `bughunt-triage` | `TRIAGE.json` |
 | 4. Report | [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md) §Phases 4–6 + [report-schema.json](report-schema.json) + [validate-findings.cjs](validate-findings.cjs) | — | `REPORT.md`, `findings.json` |
-| 5. Patch | — | `patch` | `PATCHES/`, `PATCHES.md` |
+| 5. Patch | — | `bughunt-patch` | `PATCHES/`, `PATCHES.md` |
+| 6. Payloads | [ATTACK-CLASSES.md](ATTACK-CLASSES.md) (repro inputs) | `bughunt-exploit-payloads` | `PAYLOADS.json`, `PAYLOADS.md` |
+| 7. Report page | — | `bughunt-audit-report` | `index.html` |
 
 ## Workflow
 
@@ -100,7 +109,7 @@ finding; the skill produces the structured artifact the next phase consumes.
 1. Map architecture, trust boundaries, and input surfaces using
    [RECONNAISSANCE.md](RECONNAISSANCE.md). Determine the **baseline dynamically**:
    what is this app, and what comparable apps calibrate expected risk?
-2. Invoke the **`threat-model`** skill (`../threat-model`). Use `bootstrap` when no
+2. Invoke the **`bughunt-threat-model`** skill (`../bughunt-threat-model`). Use `bootstrap` when no
    owner is available, `interview` when one is, or `bootstrap-then-interview` when
    both code and owner are present. Write `THREAT_MODEL.md`.
 3. Summarize recon + threat model into `architecture.md`; this feeds Phase 2 agent
@@ -110,7 +119,7 @@ finding; the skill produces the structured artifact the next phase consumes.
 
 1. Select attack-class scopes from [ATTACK-CLASSES.md](ATTACK-CLASSES.md), weighted
    by the threat model and by gaps from prior runs.
-2. Invoke the **`vuln-scan`** skill (`../vuln-scan`) against the target. It first
+2. Invoke the **`bughunt-vuln-scan`** skill (`../bughunt-vuln-scan`) against the target. It first
    runs a deterministic pre-scan (semgrep SAST, osv-scanner dependency CVEs, and
    grype image CVEs when a Dockerfile is present, plus a [Security
    Context](https://securitycontext.dev) history/CVE lookup when the target is a
@@ -124,9 +133,11 @@ finding; the skill produces the structured artifact the next phase consumes.
 
 ### Phase 3 — Validate → triage
 
-1. Invoke the **`triage`** skill (`../triage`) on `VULN-FINDINGS.json`. It verifies
-   each finding is real, collapses duplicates, re-ranks by derived exploitability,
-   and tags an owner, writing `TRIAGE.json`.
+1. Invoke the **`bughunt-triage`** skill (`../bughunt-triage`) on `VULN-FINDINGS.json`. It verifies
+   each finding via a **multi-model verifier panel** (one model per vote) and a
+   **judge on the largest capable model available** for split votes, then
+   collapses duplicates, re-ranks by derived exploitability, and tags an owner,
+   writing `TRIAGE.json`.
 2. Enforce Phase 3 of [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md):
    independently try to **disprove** every surviving finding. Drop anything that
    needs the word "potentially". Demote defense-in-depth gaps to hardening notes.
@@ -143,11 +154,46 @@ finding; the skill produces the structured artifact the next phase consumes.
 
 ### Phase 5 — Patch → candidate fixes
 
-1. Invoke the **`patch`** skill (`../patch`), preferring `TRIAGE.json` as input
+1. Invoke the **`bughunt-patch`** skill (`../bughunt-patch`), preferring `TRIAGE.json` as input
    (falls back to `VULN-FINDINGS.json`).
 2. Patches are written as **inert diffs for human review** under
    `PATCHES/bug_NN/` with `PATCHES.md` / `PATCHES.json`. Do not apply them
    automatically; present them for the maintainer to accept.
+
+### Phase 6 — Payloads → repro inputs
+
+1. Invoke the **`bughunt-exploit-payloads`** skill (`../bughunt-exploit-payloads`) on the run
+   directory. It reads `findings.json` (preferred — uses each confirmed entry's
+   `execution.payloads`) or `TRIAGE.json`, and writes `PAYLOADS.json` /
+   `PAYLOADS.md`: one card per `exploitable` / `needs_manual_test` true positive,
+   each carrying the literal input, how to fire it at a controlled instance, and
+   the observable success signal.
+2. **Authorized testing only.** Payloads are inert text tied to findings already
+   verified in this run — never executed here, never aimed at third parties. Any
+   SSRF/exfil payload must point at a canary the tester owns (enforced in the
+   skill's guardrails). `mitigated`/rejected findings are skipped with a reason.
+
+### Phase 7 — Report page → index.html (required final step)
+
+**Do not declare the audit finished until this phase completes.**
+
+1. Read `../bughunt-audit-report/SKILL.md` and follow it on `<output-dir>`.
+2. Write `<output-dir>/narrative.json` — prose slots summarized faithfully from
+   `architecture.md`, `REPORT.md`, and `THREAT_MODEL.md` (see audit-report skill
+   for the schema). Do not invent facts.
+3. Generate the HTML report (matches the run-1 template layout/styling):
+   ```
+   python3 .claude/skills/bughunt-audit-report/generate-report.py <output-dir>
+   ```
+   This writes `<output-dir>/index.html`. Counts, severity badges, findings
+   tables, and patch cards are derived from `TRIAGE.json` / `PATCHES.json` /
+   `PAYLOADS.json` / `findings.json` — never hand-edit `index.html` to fix numbers.
+4. Verify the file exists (`ls <output-dir>/index.html`). Present the report to
+   the user as `file://<absolute-output-dir>/index.html`. Do not open a browser
+   or push it anywhere.
+
+If `PAYLOADS.json` is missing (Phase 6 skipped), the report still generates;
+payload and patch sections show empty-state cards.
 
 ## Severity (shared rubric)
 
@@ -188,4 +234,17 @@ Keep the pipeline skills' severities reconciled to this rubric when they disagre
   FINDINGS-DETAIL.md   # Phase 4
   findings.json        # Phase 4 (validated against report-schema.json)
   PATCHES/             # Phase 5 (patch skill) — inert diffs for review
+  PAYLOADS.json        # Phase 6 (exploit-payloads skill) — repro inputs
+  PAYLOADS.md          # Phase 6 — human-readable payload cards
+  index.html           # Phase 7 (audit-report) — REQUIRED; self-contained HTML report
 ```
+
+## Audit completion checklist
+
+Before telling the user the audit is done, confirm:
+
+- [ ] `TRIAGE.json` and `findings.json` (validated) exist
+- [ ] `REPORT.md` and `FINDINGS-DETAIL.md` exist
+- [ ] `narrative.json` exists (prose slots for the HTML report)
+- [ ] **`index.html` exists** — generated by `generate-report.py`, not hand-written
+- [ ] You gave the user a `file://…/index.html` link to the run directory

@@ -1,13 +1,15 @@
 ---
-name: triage
+name: bughunt-triage
 description: Triage a batch of raw security findings. Verify each is real,
   collapse duplicates, re-rank by derived exploitability, and tag with an
-  owner. Takes a directory or file of scanner output and writes TRIAGE.json
-  + TRIAGE.md sorted by what actually needs engineering attention. Use when
-  asked to "triage findings", "validate scanner output", "prioritize vulns",
-  or "review the backlog". Runs interactively by default; pass --auto to
-  skip the interview.
-argument-hint: "<findings-path> [--auto] [--votes N] [--repo PATH] [--fp-rules FILE] [--fresh]"
+  owner. Phase 3 uses a multi-model verifier panel (one model per vote) and
+  a judge on the largest capable model available for split votes. Takes a
+  directory or file of scanner output and writes TRIAGE.json + TRIAGE.md
+  sorted by what actually needs engineering attention. Use when asked to
+  "triage findings", "validate scanner output", "prioritize vulns", or
+  "review the backlog". Runs interactively by default; pass --auto to skip
+  the interview.
+argument-hint: "<findings-path> [--auto] [--votes N] [--repo PATH] [--fp-rules FILE] [--fresh] [--judge-model SLUG]"
 allowed-tools:
   - Read
   - Glob
@@ -25,7 +27,7 @@ allowed-tools:
   - WebFetch
 ---
 
-# triage
+# bughunt-triage
 
 Adversarial triage of raw security-scanner output. Does four jobs:
 **verify** each finding is real, **deduplicate** across runs and scanners,
@@ -33,7 +35,7 @@ Adversarial triage of raw security-scanner output. Does four jobs:
 claimed severity, and **route** each to a component owner. Output is a
 short, ranked, owned list instead of a raw dump.
 
-Invoke with `/triage <findings-path> [--auto] [--votes N] [--repo PATH] [--fp-rules FILE]`.
+Invoke with `/bughunt-triage <findings-path> [--auto] [--votes N] [--repo PATH] [--fp-rules FILE] [--judge-model SLUG]`.
 
 **Arguments** (parse from `$ARGUMENTS`; positional `$1`/`$2` expansion is
 not stable across runtimes):
@@ -43,7 +45,9 @@ not stable across runtimes):
 - `--auto`: skip the interview and use defaults. Default mode is
   **interactive**.
 - `--votes N`: verifier votes per finding (default 3; use 1 for a quick
-  pass, 5 for high-stakes batches).
+  pass, 5 for high-stakes batches). Each vote is spawned on a **different
+  model** from the verifier panel (Phase 3b) to reduce single-model blind
+  spots.
 - `--repo PATH`: path to the target codebase, read-only (default cwd).
   Verification needs source access; the skill stops with an error if the
   cited files aren't reachable.
@@ -51,6 +55,9 @@ not stable across runtimes):
   exclusion-rule list (Phase 3a). Use for org-specific precedents: "we use
   Prisma ORM everywhere — raw-query SQLi only", "k8s resource limits cover
   DoS", etc. Plain text, one rule per line or paragraph.
+- `--judge-model SLUG`: optional override for the Phase 3d judge `model`
+  parameter on Task calls. When omitted, pick the **largest / most capable
+  model available** from the platform allowlist (see Phase 0e).
 - `--fresh`: ignore any existing checkpoint in `./.triage-state/` and start
   from Phase 0. Without this flag the skill resumes from the last completed
   phase if a checkpoint is present.
@@ -80,7 +87,7 @@ access is permitted anywhere in this skill, including inside subagents.
 
 On large finding batches a full run can exhaust context or hit rate limits
 mid-way — particularly Phase 3, which spawns `candidates × votes` verifiers.
-Phase state persists to `./.triage-state/` so a fresh `/triage` session can
+Phase state persists to `./.triage-state/` so a fresh `/bughunt-triage` session can
 resume without re-asking the interview or re-spawning verifiers.
 
 All checkpoint I/O goes through `python3 .claude/skills/_lib/checkpoint.py`
@@ -129,9 +136,10 @@ State files in `./.triage-state/`:
 
 From `$ARGUMENTS`: extract the findings path (first positional), `--auto`
 flag, `--votes N` (default 3), `--repo PATH` (default `.`), `--fp-rules
-FILE` (default none). If no findings path was given, ask for one and stop.
-If `--fp-rules` was given, Read the file now and carry its contents as
-`context.extra_fp_rules` for injection into the Phase 3a verifier prompt.
+FILE` (default none), `--judge-model SLUG` (default none). If no findings
+path was given, ask for one and stop. If `--fp-rules` was given, Read the
+file now and carry its contents as `context.extra_fp_rules` for injection
+into the Phase 3a verifier prompt.
 
 ### 0b. Interactive mode (default): interview the user
 
@@ -216,10 +224,51 @@ bias it toward TRUE_POSITIVE on a claim it should be trying to disprove. It
 is only consumed by Phase 4 ranking (4a) as a capped threat-match signal,
 and echoed in the TRIAGE.md header for reviewer context.
 
+### 0e. Multi-model panel and judge selection
+
+Phase 3 uses a **diverse verifier panel** (one model per vote) and a
+**judge model** (largest / most capable available) to break split votes.
+Record both in `context` before verification starts.
+
+**Platform allowlist** (Cursor `Task` tool `model` parameter — update if the
+runtime's list changes; never pass a slug not on the list):
+
+| Tier | Model slug | Role |
+|------|------------|------|
+| 1 | `claude-opus-4-8-thinking-high` | Judge (preferred) |
+| 1 | `claude-sonnet-5-thinking-high` | Judge fallback / verifier |
+| 1 | `claude-fable-5-thinking-high` | Judge fallback / verifier |
+| 1 | `gpt-5.3-codex` | Judge fallback / verifier |
+| 2 | `claude-4.6-sonnet-medium-thinking` | Verifier panel |
+| 2 | `gpt-5.5-medium` | Verifier panel |
+| 2 | `composer-2.5-fast` | Verifier panel (cheap sweep) |
+
+**Judge model (`context.judge_model`):**
+- If `--judge-model SLUG` was passed, use it (must be on the allowlist).
+- Else walk the Tier-1 list top-to-bottom and set `context.judge_model` to
+  the **first** slug you can use on Task calls. Prefer the largest /
+  highest-thinking model available (`claude-opus-4-8-thinking-high` first).
+- The judge is used only in Phase 3d (split / tie / majority
+  `CANNOT_VERIFY`). It is the binding verdict on those findings.
+
+**Verifier panel (`context.verifier_models`):** ordered list of slugs for
+round-robin assignment across votes. Build it as:
+1. Start with Tier-2 slugs in an order that **alternates model families**
+   (Anthropic ↔ OpenAI ↔ Composer), e.g.
+   `claude-4.6-sonnet-medium-thinking`, `gpt-5.5-medium`,
+   `composer-2.5-fast`.
+2. Append any Tier-1 slugs not chosen as judge (deduped).
+3. If the list is shorter than `--votes`, cycle it; if longer, truncate to
+   `votes` unique assignments per finding by round-robin.
+
+Every verifier Task in Phase 3b **must** set `model:` to
+`context.verifier_models[(k-1) % len(verifier_models)]` for vote `k`.
+Every judge Task in Phase 3d **must** set `model: context.judge_model`.
+
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 0, "context": {mode, environment, threat_model, scoring, noise_tolerance, votes_per_finding, repo, findings_path, security_context}}
+{"phase": 0, "context": {mode, environment, threat_model, scoring, noise_tolerance, votes_per_finding, repo, findings_path, security_context, judge_model, verifier_models}}
 ```
 
 Then Bash:
@@ -391,10 +440,14 @@ Then Bash:
 ## Phase 3: Verify
 
 For each candidate, N independent adversarial verifiers re-derive the claim
-from the code and vote. Each verifier's stance is "find any reason this is
-wrong." Each starts from the code at the cited location, not the scanner's
-description, and never sees the other verifiers' reasoning (shared context
-propagates blind spots).
+from the code and vote — **each on a different model** from
+`context.verifier_models` (Phase 0e). Split outcomes go to a **judge** on
+`context.judge_model` (the largest / most capable model available).
+Each verifier's stance is "find any reason this is wrong." Each starts from
+the code at the cited location, not the scanner's description, and never sees
+the other verifiers' reasoning (shared context propagates blind spots).
+The judge may see all N verdict blocks but must still re-read the cited
+source and issue its own binding decision.
 
 ### 3a. Verifier prompt (assemble once, reuse for every spawn)
 
@@ -519,17 +572,22 @@ default.
 ### 3b. Spawn N verifiers per candidate, all in one message
 
 For each finding in `candidates[]`, build N Task calls (N = `--votes`,
-default 3) with `subagent_type: "general-purpose"` and `description:
-"verify {id} vote {k}/{N}"`.
+default 3) with `subagent_type: "general-purpose"`, `description:
+"verify {id} vote {k}/{N}"`, and **`model:` set to the k-th panel slot**:
 
-**Always set `subagent_type`; never fork.** Omitting `subagent_type` forks
-the orchestrator, and a fork inherits the full conversation context: every
-other finding's description, the scanner's prose, and any prior verifier
-results. That defeats verifier independence and re-introduces the
-inherited-framing failure mode this phase exists to prevent. Each verifier
-must start with a fresh, empty context and receive only the 3a prompt
-plus the single finding under review. The same applies to the ranking
-subagents in 4a.
+```
+model = context.verifier_models[(k - 1) % len(context.verifier_models)]
+```
+
+**Always set `subagent_type` and `model`; never fork.** Omitting
+`subagent_type` forks the orchestrator, and a fork inherits the full
+conversation context: every other finding's description, the scanner's
+prose, and any prior verifier results. That defeats verifier independence
+and re-introduces the inherited-framing failure mode this phase exists to
+prevent. Each verifier must start with a fresh, empty context and receive
+only the 3a prompt plus the single finding under review. The same applies
+to the ranking subagents in 4a and the judge in 3d (judge gets verdict
+blocks only, not other findings).
 
 Each prompt is the verifier prompt from 3a with this block appended:
 
@@ -553,8 +611,9 @@ FINDING UNDER REVIEW (from the scanner; treat as a CLAIM, not a fact):
   preconditions (claimed):
   {preconditions as bullets or "(not provided)"}
 
-You are vote {k} of {N}. You have NOT seen the other verifiers' reasoning
-and you must NOT try to find it. Work independently from the code.
+You are vote {k} of {N} on model {model_slug}. You have NOT seen the other
+verifiers' reasoning and you must NOT try to find it. Work independently
+from the code.
 ```
 
 **Put all verifier Task calls in a single assistant message** so they run
@@ -599,7 +658,7 @@ End with EXACTLY:
 FINDING: {id} {file}:{line} {category} (claimed {severity})
 {title}
 {description}
-Vote {k}/{N}. Independent; do not seek other votes.
+Vote {k}/{N} on {model_slug}. Independent; do not seek other votes.
 ```
 
 Findings with a `file` but no `line` get **one** verifier vote regardless
@@ -622,18 +681,19 @@ subagents in 4a.
 ### 3c. Tally votes
 
 For each candidate, parse the trailing block from each of its N verifiers
-(tolerate code fences and whitespace). If a verifier errored, timed out,
-or produced no parseable VERDICT block, re-spawn it once. If the retry
-also fails, count that vote as `cannot_verify` with `confidence: 0` and
-note `"verifier_error"` in `refute_reasons`. The remaining N-1 votes still
-decide.
+(tolerate code fences and whitespace). Record each vote's `model` slug in
+`vote_models: [{vote: k, model: slug, verdict: ...}, ...]`. If a verifier
+errored, timed out, or produced no parseable VERDICT block, re-spawn it once
+on the **same** panel model. If the retry also fails, count that vote as
+`cannot_verify` with `confidence: 0` and note `"verifier_error"` in
+`refute_reasons`. The remaining N-1 votes still decide.
 
 Build:
 
 - `vote_breakdown`: `{"true_positive": x, "false_positive": y,
   "cannot_verify": z}`
 - `confidence`: mean CONFIDENCE across votes that agree with the majority,
-  rounded to one decimal.
+  rounded to one decimal (before judge; updated after judge in 3d).
 - `exclusion_rule`: the modal EXCLUSION_RULE among FALSE_POSITIVE votes,
   else `null`.
 - `refute_reasons`: sorted unique REFUTE_REASON values from FALSE_POSITIVE
@@ -641,26 +701,98 @@ Build:
 - `first_links`: unique FIRST_LINK values across all votes (reachability
   audit trail).
 - `rationale`: the RATIONALE from the highest-confidence vote on the
-  winning side, verbatim.
+  winning side, verbatim (replaced by judge rationale when 3d runs).
 
-**Decide `verdict`:**
-- Majority TRUE_POSITIVE → `verdict: true_positive`. Proceeds to Phase 4.
-- Majority FALSE_POSITIVE → `verdict: false_positive`. Skips Phase 4.
-- No majority (tie, or majority CANNOT_VERIFY):
-  - Noise tolerance `precision` → `verdict: false_positive`; append
-    `"(split vote, dropped under precision policy)"` to rationale.
-  - Noise tolerance `recall` → `verdict: true_positive` with
-    `verify_verdict: needs_manual_test`. Proceeds to Phase 4.
-  - Noise tolerance `ask` → collect all split findings and present them in
-    one AskUserQuestion call at the end of Phase 3 (header: id + title,
-    options: keep / drop), then apply the user's choices.
+**Provisional `verdict` (before judge):**
+- Unanimous TRUE_POSITIVE (all N) → `verdict: true_positive`. Skip 3d.
+- Unanimous FALSE_POSITIVE (all N) → `verdict: false_positive`. Skip 3d.
+- Clear majority TRUE_POSITIVE or FALSE_POSITIVE (strictly more than half
+  of N, and majority is not CANNOT_VERIFY) → use that side. Skip 3d.
+- **Otherwise** (tie, split, or majority CANNOT_VERIFY) → proceed to **3d
+  judge**. Do not apply noise_tolerance yet.
 
-Build `confirmed[]` = candidates with `verdict == true_positive`.
+### 3d. Judge split votes (largest capable model)
+
+When 3c did not produce a clear majority, spawn **one** Task with
+`subagent_type: "general-purpose"`, `model: context.judge_model`, and
+`description: "judge {id}"`. The judge prompt:
+
+```
+You are the BINDING judge for a split security-finding verification. N
+independent verifiers on different models reviewed the same scanner claim;
+they did not reach a clear majority. Your job is to read the source code
+yourself and issue the final TRUE_POSITIVE or FALSE_POSITIVE verdict.
+
+You have read-only access to the target codebase at: {REPO_PATH}
+You may use Read, Glob, and Grep only inside {REPO_PATH}. No build, run,
+install, or network.
+
+ENVIRONMENT: {context.environment}
+
+PROCEDURE:
+1. Read {file}:{line} yourself — do not trust the scanner or the panel.
+2. Trace reachability from untrusted input per ENVIRONMENT.
+3. Hunt for and stress-test protections (same exclusion rules as verifiers).
+4. Review the panel's verdict blocks below for disagreements to investigate,
+   not to rubber-stamp. You may adopt a panel argument only if you verify
+   it against source.
+
+EXCLUSION RULES: same 1-16 (+ org rules) as Phase 3a verifiers.
+
+PANEL VOTES (models and verdict blocks only):
+{for each vote k:}
+  --- Vote {k} ({model_slug}) ---
+  VERDICT: ...
+  CONFIDENCE: ...
+  REFUTE_REASON: ...
+  EXCLUSION_RULE: ...
+  FIRST_LINK: ...
+  RATIONALE: ...
+
+FINDING UNDER REVIEW:
+  id: {id}
+  file: {file}:{line}
+  category: {category}
+  title: {title}
+  description: {description}
+  exploit_scenario: {exploit_scenario or "(not provided)"}
+
+Respond with ONLY this block (binding):
+
+  VERDICT: TRUE_POSITIVE | FALSE_POSITIVE
+  CONFIDENCE: <0-10>
+  REFUTE_REASON: <doesnt_exist|already_handled|implausible_trigger|
+    intentional_behavior|misread_code|duplicate|not_actionable|n/a>
+  EXCLUSION_RULE: <1-16, org rule, or none>
+  FIRST_LINK: <file:line or "none found">
+  RATIONALE: <2-5 sentences citing file:line; note which panel disagreements
+    you confirmed or rejected>
+  JUDGE_MODEL: {context.judge_model}
+```
+
+Parse the judge block and **override** the provisional tally:
+- `verdict`: judge TRUE_POSITIVE → `true_positive`; FALSE_POSITIVE →
+  `false_positive`.
+- `confidence`: judge CONFIDENCE.
+- `rationale`: judge RATIONALE (prefix with `[judge:{judge_model}] `).
+- `judge_invoked: true`, `judge_model: context.judge_model`.
+- Merge judge FIRST_LINK into `first_links`.
+
+If the judge Task errors, fall back to noise_tolerance policy from 3c
+(without judge):
+  - `precision` → `false_positive` + `"(split vote, judge failed, precision policy)"`
+  - `recall` → `true_positive`, `verify_verdict: needs_manual_test`
+  - `ask` → AskUserQuestion at end of Phase 3
+
+When 3c produced a clear majority and 3d was skipped: `judge_invoked: false`,
+`judge_model: null`.
+
+Build `confirmed[]` = candidates with final `verdict == true_positive`.
 
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 3, "context": {...}, "findings": [ {all findings with verdict/vote_breakdown/confidence/refute_reasons/first_links/rationale/exclusion_rule} ], "confirmed": ["f001", "..."]}
+{"phase": 3, "context": {...}, "findings": [ {all findings with verdict/vote_breakdown/vote_models/confidence/refute_reasons/first_links/rationale/exclusion_rule/judge_invoked/judge_model} ], "confirmed": ["f001", "..."]}
 ```
 
 Then Bash:
@@ -859,6 +991,8 @@ Order all findings by:
     "scoring": "...",
     "noise_tolerance": "...",
     "votes_per_finding": 3,
+    "judge_model": "claude-opus-4-8-thinking-high",
+    "verifier_models": ["claude-4.6-sonnet-medium-thinking", "gpt-5.5-medium", "composer-2.5-fast"],
     "repo": "..."
   },
   "summary": {
@@ -889,6 +1023,9 @@ Order all findings by:
       "threat_match": "...|null",
       "rationale": "file:line-cited prose: reachability, protections, why each held or didn't; then ranking rationale",
       "vote_breakdown": {"true_positive": 0, "false_positive": 0, "cannot_verify": 0},
+      "vote_models": [{"vote": 1, "model": "...", "verdict": "..."}],
+      "judge_invoked": false,
+      "judge_model": null,
       "refute_reasons": ["..."],
       "exclusion_rule": null,
       "first_links": ["file:line", "..."],
@@ -919,7 +1056,9 @@ containing only the title block, summary, and `## Act on these` heading:
 
 {summary line: N in -> D duplicates, F false positives, T confirmed (H high / M med / L low), X need manual test}
 
-Context: {mode}; environment = {environment}; scoring = {scoring}; {votes}-vote verification.
+Context: {mode}; environment = {environment}; scoring = {scoring};
+{votes}-vote multi-model verification (panel: {verifier_models joined});
+judge: {judge_model} on split votes.
 
 ## Act on these
 ```
@@ -931,7 +1070,7 @@ Context: {mode}; environment = {environment}; scoring = {scoring}; {votes}-vote 
 ### [{severity}] {title}  ({id})
 `{file}:{line}` | {category} | claimed {claimed_severity} (alignment {severity_alignment:+d}) | confidence {confidence}/10
 **Owner:** {owner_hint}
-**Verdict:** {verify_verdict}, votes {vote_breakdown}
+**Verdict:** {verify_verdict}, votes {vote_breakdown}{if judge_invoked:} (judge: {judge_model}){/if}
 **Preconditions ({n}):** {bulleted}
 **Threat-model match:** {threat_match or "none"}
 **Why:** {rationale}
@@ -986,7 +1125,7 @@ Wrote ./TRIAGE.md and ./TRIAGE.json
 Smoke test (five-finding fixture: 2 real, 1 dup, 2 FP):
 
 ```
-/triage .claude/skills/triage/fixtures/canary-findings.json --auto --repo targets/canary
+/bughunt-triage .claude/skills/bughunt-triage/fixtures/canary-findings.json --auto --repo targets/canary
 ```
 
 Expected: f001 and f003 confirmed; f002 duplicate of f001; f004 dropped
@@ -997,7 +1136,7 @@ Or against pipeline output:
 
 ```
 vuln-pipeline run drlibs --runs 3 --parallel --stream
-/triage results/drlibs/<ts>/ --repo targets/drlibs
+/bughunt-triage results/drlibs/<ts>/ --repo targets/drlibs
 ```
 
 Hand-check a sample of TRUE_POSITIVE/HIGH results (the `first_links` should
@@ -1013,6 +1152,11 @@ point at real call sites) and a sample of FALSE_POSITIVE rejects (the
   doesn't help when the orchestrator's context window itself fills;
   file-backed checkpoints let a brand-new session pick up from the last
   completed phase. `./.triage-state/` is scratch — add to `.gitignore`.
+- **Multi-model verify + judge:** each vote runs on a different model from
+  `verifier_models` (Phase 0e) to reduce single-model blind spots; split /
+  tie / majority-CANNOT_VERIFY outcomes go to `judge_model` — the largest /
+  most capable model available (`claude-opus-4-8-thinking-high` preferred).
+  Unanimous or clear-majority findings skip the judge to save cost.
 - **Dedupe runs before verify** to cut verifier spend by the duplication
   factor (often 2-4x on multi-scanner input) at the cost of one cheap
   subagent.

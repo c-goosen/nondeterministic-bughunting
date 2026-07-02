@@ -6,11 +6,11 @@
   the shipped harness config (`.claude/settings.json`), and added a
   cross-model workflow — re-running the pipeline via the Cursor CLI agent
   with GLM 5.2 or Kimi K2.7 to prevent single-model blind spots, with the
-  merged findings deduped in one `/triage` pass.
+  merged findings deduped in one `/bughunt-triage` pass.
 - Added this `RELEASE.md`.
 - Credited Devansh's _Needle in the Haystack_ as methodology prior art
   (`NOTICES.md` §5, README "Further reading").
-- `vuln-scan`: restructured the per-subagent review brief into four passes —
+- `bughunt-vuln-scan`: restructured the per-subagent review brief into four passes —
   seeds, **invariant decomposition** (enumerate the assumptions a slice
   depends on, then test each), hunt, and a **"what else?" second pass** — and
   added a **context-budget directive** so scaffolding doesn't crowd out code.
@@ -24,27 +24,27 @@ Initial release of the agentic security-audit toolkit.
 
 ### Added
 
-- **`security-audit` orchestrator skill** — net-new MIT-licensed glue that
-  drives the full pipeline (`threat-model` → `vuln-scan` → `triage` →
-  `patch`) and folds the Cloudflare audit methodology (reconnaissance,
+- **`bughunt-security-audit` orchestrator skill** — net-new MIT-licensed glue that
+  drives the full pipeline (`bughunt-threat-model` → `bughunt-vuln-scan` → `bughunt-triage` →
+  `bughunt-patch`) and folds the Cloudflare audit methodology (reconnaissance,
   hunting, attack classes, validation & reporting) into each stage. Ships
   with `report-schema.json` and a `validate-findings.cjs` checker for the
   machine-readable output.
-- **`threat-model` skill** — three modes (interview, bootstrap,
+- **`bughunt-threat-model` skill** — three modes (interview, bootstrap,
   bootstrap-then-interview) that all write `THREAT_MODEL.md` in a shared
   schema.
-- **`vuln-scan` skill** — deterministic pre-scan with five external
+- **`bughunt-vuln-scan` skill** — deterministic pre-scan with five external
   scanners (semgrep, osv-scanner, grype, gitleaks, checkov) followed by a
   parallel LLM review fan-out seeded with the scanner hits; writes
   `VULN-FINDINGS.json`/`.md`.
-- **`triage` skill** — verifies raw findings, collapses duplicates, re-ranks
+- **`bughunt-triage` skill** — verifies raw findings, collapses duplicates, re-ranks
   by exploitability, and writes `TRIAGE.json`/`.md`; includes canary
   fixtures for self-testing.
-- **`patch` skill** — generates inert candidate diffs per verified finding
+- **`bughunt-patch` skill** — generates inert candidate diffs per verified finding
   with an independent reviewer pass; writes `PATCHES/` plus `PATCHES.md`
   and `PATCHES.json`.
 - **`setup-tools.sh`** — one-shot installer for the five external scanners.
-- **Security Context integration** — `vuln-scan` and `triage` pull cached
+- **Security Context integration** — `bughunt-vuln-scan` and `bughunt-triage` pull cached
   fix-commit/CVE history from [securitycontext.dev](https://securitycontext.dev)
   for public GitHub targets, as advisory context only (best-effort,
   network-optional).

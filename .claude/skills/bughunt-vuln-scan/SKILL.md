@@ -1,14 +1,14 @@
 ---
-name: vuln-scan
+name: bughunt-vuln-scan
 description: >-
   Static source-code vulnerability scan. Runs a deterministic semgrep
   pre-scan, then reads a target directory (and THREAT_MODEL.md if present),
   spawns parallel review subagents per focus area seeded with the semgrep
-  hits, and writes VULN-FINDINGS.json + .md for /triage to consume. Read-only
+  hits, and writes VULN-FINDINGS.json + .md for /bughunt-triage to consume. Read-only
   — no building, running, or network. For execution-verified crashes, use
   vuln-pipeline instead. Use when asked to "scan for vulns", "review this code
   for security issues", "find bugs in <dir>", or as the step between
-  /threat-model and /triage.
+  /bughunt-threat-model and /bughunt-triage.
 argument-hint: "<target-dir> [--focus <area>] [--single] [--extra <file>] [--no-score] [--no-semgrep]"
 allowed-tools:
   - Read
@@ -24,6 +24,7 @@ allowed-tools:
   - Bash(head:*)
   - Bash(file:*)
   - Bash(semgrep:*)
+  - Bash(bash .claude/skills/bughunt-vuln-scan/run-semgrep.sh:*)
   - Bash(osv-scanner:*)
   - Bash(grype:*)
   - Bash(gitleaks:*)
@@ -33,10 +34,10 @@ allowed-tools:
   - WebFetch
 ---
 
-# /vuln-scan
+# /bughunt-vuln-scan
 
 Static vulnerability review of a source tree. Produces `VULN-FINDINGS.json`
-(+ a human-readable `.md`) that `/triage` ingests directly.
+(+ a human-readable `.md`) that `/bughunt-triage` ingests directly.
 
 **Role.** You are acting as a blue-team defender: hunting for vulnerabilities
 in this codebase and its dependencies so they can be triaged and patched,
@@ -83,8 +84,8 @@ Steps 0–0e shell out to `semgrep`, `osv-scanner`, `grype`, `gitleaks`, and
 full deterministic layer install them once:
 
 ```
-bash .claude/skills/vuln-scan/setup-tools.sh         # install what's missing
-bash .claude/skills/vuln-scan/setup-tools.sh --check # just report status
+bash .claude/skills/bughunt-vuln-scan/setup-tools.sh         # install what's missing
+bash .claude/skills/bughunt-vuln-scan/setup-tools.sh --check # just report status
 ```
 
 The script is idempotent and skips anything already on PATH. If you cannot
@@ -102,21 +103,27 @@ Skip this step if `--no-semgrep` was given.
 1. **Check availability.** Run `semgrep --version`. If semgrep is not
    installed, note it, set `semgrep_used=false`, and continue to Step 1 with
    no seeds — semgrep is an enhancement, not a hard dependency.
-2. **Run the scan** against `<target-dir>` with the default registry rules and
-   JSON output, writing to a file you then Read:
+2. **Run the local directory scan** via `run-semgrep.sh` (bundled offline
+   rules under `semgrep/`, no `--config auto` registry fetch):
 
    ```
-   semgrep scan --config auto --json --quiet \
-     --output <target-dir>/.semgrep.json <target-dir>
+   bash .claude/skills/bughunt-vuln-scan/run-semgrep.sh <target-dir-or-name> \
+     --output <target-dir>/.semgrep.json
    ```
 
-   - `--config auto` selects rules by detected languages. If the environment
-     blocks the rule-registry fetch, fall back to bundled rulesets
-     (`--config p/security-audit --config p/secrets`) or whatever the local
-     install provides; record which config was used.
-   - The scan reads source only. This is rule fetching + static matching, not
-     probing of a running target, so it does not violate the no-execution /
-     no-network-probe constraint.
+   - **Target resolution:** the script accepts an absolute/relative path, a
+     repo-relative path, or a short name `foo` → `targets/foo` (then the repo
+     root if still missing). The scan target is always a **local directory
+     tree**, never the Semgrep Registry.
+   - **Rules:** `--config <skill>/semgrep/` (see `semgrep/rules.yaml`). Do
+     not use `--config auto` (registry + project telemetry). If you must
+     extend coverage, add rules under `semgrep/` rather than pulling registry
+     packs in the skill workflow.
+   - **Fallback** (only if `run-semgrep.sh` is missing): `semgrep scan
+     --config <skill>/semgrep/ --metrics off --json --quiet` with the same
+     `--exclude` list as the script, scanning the resolved `<target-dir>`.
+   - The scan reads source only; static matching on a local path does not
+     violate the no-execution / no-network-probe constraint.
 3. **Parse `.semgrep.json`.** For each `results[]` entry, extract
    `check_id`, `path`, `start.line`, `extra.severity`, `extra.message`, and
    `extra.metadata` (cwe/owasp if present). Normalize into seed records:
@@ -477,7 +484,7 @@ single <finding> with category=none and a one-line note of what you covered.
    - Step 0e (checkov) → `category: "infra-misconfig"`, `source: "checkov"`.
 3. **Light dedupe** — if two findings cite the same `file:line` with the
    same category, keep the one with the longer description and note the
-   duplicate id. (Heavy dedupe is `/triage`'s job; don't over-engineer here.)
+   duplicate id. (Heavy dedupe is `/bughunt-triage`'s job; don't over-engineer here.)
 4. Assign stable ids `F-001`, `F-002`, ... in (severity desc, file, line)
    order.
 
@@ -485,7 +492,7 @@ single <finding> with category=none and a one-line note of what you covered.
 
 A cheap second-opinion read that **ranks** findings by signal quality.
 **Nothing is dropped** — this pass calibrates `confidence` so humans and
-`/triage` see high-signal findings first. Spawn **one Task subagent per
+`/bughunt-triage` see high-signal findings first. Spawn **one Task subagent per
 finding** in parallel with the brief below. Shallow: re-read and score, not
 a full reachability trace.
 
@@ -530,7 +537,7 @@ confidence < 0.4, for the summary line.
 
 Write **both** files to `<target-dir>/`:
 
-**`VULN-FINDINGS.json`** — the `/triage` ingest shape:
+**`VULN-FINDINGS.json`** — the `/bughunt-triage` ingest shape:
 
 ```json
 {
@@ -575,7 +582,7 @@ Tell the user:
 1. Counts: N findings (H/M/L split, X low-confidence), across K focus
    areas, from M source files.
 2. Top 3 by confidence, one line each.
-3. Next step: `> /triage <target-dir>/VULN-FINDINGS.json --repo <target-dir>`
+3. Next step: `> /bughunt-triage <target-dir>/VULN-FINDINGS.json --repo <target-dir>`
 4. Remind: these are **static candidates**, not verified. For
    execution-verified crashes, `vuln-pipeline run <target>` (README Step 2).
 
@@ -598,8 +605,8 @@ Tell the user:
   something you Read or Grep'd. If unsure of the exact line, cite the
   function and say so in the description.
 - **Stay in `<target-dir>`.** Don't follow symlinks or `..` out of it.
-- Findings are candidates for `/triage`, not final verdicts. **This skill
-  never drops a finding** — Step 3b only ranks. `/triage` does the rigorous
+- Findings are candidates for `/bughunt-triage`, not final verdicts. **This skill
+  never drops a finding** — Step 3b only ranks. `/bughunt-triage` does the rigorous
   N-vote verification and is where false positives actually get removed.
 
 ## Provenance

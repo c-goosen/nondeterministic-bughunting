@@ -1,7 +1,8 @@
-# triage
+# bughunt-triage
 
 A Claude Code skill that triages a batch of raw security-scanner findings:
-verifies each is real, collapses duplicates, re-ranks by derived
+verifies each is real (via a **multi-model verifier panel** and a
+**judge** on split votes), collapses duplicates, re-ranks by derived
 exploitability, and tags each survivor with a component owner. Turns a raw
 dump into a short, ranked, owned list.
 
@@ -22,14 +23,14 @@ will also ingest loosely-structured JSON or markdown from other scanners.
 Project-scoped (ships with this repo — nothing to do if you cloned it):
 
 ```bash
-ls .claude/skills/triage/SKILL.md
+ls .claude/skills/bughunt-triage/SKILL.md
 ```
 
 Or user-scoped:
 
 ```bash
 mkdir -p ~/.claude/skills
-cp -r .claude/skills/triage ~/.claude/skills/
+cp -r .claude/skills/bughunt-triage ~/.claude/skills/
 ```
 
 ## Usage
@@ -37,7 +38,7 @@ cp -r .claude/skills/triage ~/.claude/skills/
 From a Claude Code session in the target repo:
 
 ```
-/triage path/to/findings.json
+/bughunt-triage path/to/findings.json
 ```
 
 Interactive mode (the default) opens with a short interview about your
@@ -46,25 +47,39 @@ reachability is judged and how severity is labeled. To skip the interview
 and use defaults:
 
 ```
-/triage path/to/findings.json --auto
+/bughunt-triage path/to/findings.json --auto
 ```
 
 Common invocations:
 
 ```
-/triage VULN-FINDINGS.json                          # vuln-scan output, repo = cwd
-/triage results/mytarget/2026-04-14/ --repo .       # vuln-pipeline output
-/triage scanner_export/ --votes 5 --repo ~/src/app  # high-stakes batch, 5-vote verify
-/triage backlog.md --auto --votes 1                 # quick first pass on a markdown report
+/bughunt-triage VULN-FINDINGS.json                          # vuln-scan output, repo = cwd
+/bughunt-triage results/mytarget/2026-04-14/ --repo .       # vuln-pipeline output
+/bughunt-triage scanner_export/ --votes 5 --repo ~/src/app  # high-stakes: 5 models vote
+/bughunt-triage backlog.md --auto --votes 1                 # quick first pass
+/bughunt-triage findings.json --judge-model claude-opus-4-8-thinking-high  # override judge
 ```
+
+### Multi-model verification
+
+Phase 3 assigns **each vote to a different model** (round-robin across a
+diverse panel — Anthropic, OpenAI, Composer) so a single model's blind
+spots do not dominate. When votes split, tie, or majority `CANNOT_VERIFY`,
+a **judge** on the **largest / most capable model available** re-reads the
+source and issues the binding verdict (default: `claude-opus-4-8-thinking-high`
+when available). Unanimous or clear-majority findings skip the judge.
+
+Override the judge with `--judge-model <slug>` (must be on the platform
+Task allowlist). See `SKILL.md` Phase 0e for the full model tier table.
 
 ## Output
 
 - `./TRIAGE.json` — every input finding, annotated with `verdict`,
   `verify_verdict`, recomputed `severity`, `severity_alignment` vs. the
-  scanner's claim, `preconditions`, `vote_breakdown`, `rationale` citing
-  file:line evidence, `owner_hint`, and `duplicate_of` where applicable.
-  Sorted by what to act on first.
+  scanner's claim, `preconditions`, `vote_breakdown`, `vote_models`,
+  `judge_invoked` / `judge_model`, `rationale` citing file:line evidence,
+  `owner_hint`, and `duplicate_of` where applicable. Sorted by what to act
+  on first.
 - `./TRIAGE.md` — reviewer-facing report: an "Act on these" section with
   one entry per confirmed finding, then a "Dropped" table explaining every
   rejection.
@@ -76,7 +91,7 @@ proof-of-concept, not as a failure.
 ## Checkpointing and resume
 
 Per-phase state is written to `./.triage-state/`. If a run is interrupted
-(rate limit, context exhaustion, Ctrl-C), re-invoking `/triage` with the same
+(rate limit, context exhaustion, Ctrl-C), re-invoking `/bughunt-triage` with the same
 arguments resumes from the last completed phase — the interview is not
 re-asked and verifiers already tallied are not re-spawned. Pass `--fresh` to
 start over. `./.triage-state/` is scratch; add it to `.gitignore`.
@@ -84,7 +99,7 @@ start over. `./.triage-state/` is scratch; add it to `.gitignore`.
 ## What it does and doesn't do
 
 - **Does:** read source, grep for callers, reason about reachability and
-  protections, vote, rank, and route.
+  protections, multi-model vote, judge split outcomes, rank, and route.
 - **Does not:** build, run, or test the target; install dependencies;
   reach the network; write proof-of-concept exploits. All conclusions are
   static. This is deliberate — the skill is meant to run in a review box

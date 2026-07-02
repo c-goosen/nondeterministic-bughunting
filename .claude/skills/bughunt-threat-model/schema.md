@@ -2,9 +2,9 @@
 
 > **Re-read note:** If you need this file mid-session and the Read tool
 > reports "file unchanged", the prior result was evicted from context; reload
-> with `cat .claude/skills/threat-model/schema.md` via Bash.
+> with `cat .claude/skills/bughunt-threat-model/schema.md` via Bash.
 
-Both `/threat-model interview` and `/threat-model bootstrap` write
+Both `/bughunt-threat-model interview` and `/bughunt-threat-model bootstrap` write
 this file to `<target-dir>/THREAT_MODEL.md`. The format is markdown so humans
 can read and edit it, but the section headings, table columns, and enum values
 below are a contract: keep the headings and column order exactly as shown so

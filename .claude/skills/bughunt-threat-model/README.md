@@ -1,4 +1,4 @@
-# threat-model
+# bughunt-threat-model
 
 A Claude Code skill that builds a threat model for a target codebase. Two
 modes: **bootstrap** derives the threat model from the target itself (source
@@ -19,7 +19,7 @@ Vulnerability scanners find instances; a threat model is the map of where
 instances are likely to be and which ones matter. Hand the pipeline a threat
 model and it knows where to look. Hand triage a threat model and it knows
 which findings to escalate. Use the output's focus areas to seed the
-`vuln-pipeline` recon partition and to inform how you prioritize `/triage`
+`vuln-pipeline` recon partition and to inform how you prioritize `/bughunt-triage`
 results.
 
 ## Model selection
@@ -36,13 +36,13 @@ pipeline with. If you want to lock the model regardless of session, add a
 Project-scoped (already done if you cloned this repo):
 
 ```bash
-ls .claude/skills/threat-model/
+ls .claude/skills/bughunt-threat-model/
 ```
 
 User-scoped:
 
 ```bash
-cp -r .claude/skills/threat-model ~/.claude/skills/
+cp -r .claude/skills/bughunt-threat-model ~/.claude/skills/
 ```
 
 ## Usage
@@ -53,8 +53,8 @@ Use when no application owner is available. Point it at a checkout and,
 optionally, a list of past vulnerabilities:
 
 ```
-/threat-model bootstrap targets/drlibs
-/threat-model bootstrap targets/drlibs --vulns targets/drlibs/vulns.txt
+/bughunt-threat-model bootstrap targets/drlibs
+/bughunt-threat-model bootstrap targets/drlibs --vulns targets/drlibs/vulns.txt
 ```
 
 Without `--vulns` the skill mines `git log`, `CHANGELOG`, and GitHub Security
@@ -73,8 +73,8 @@ the same briefs sequentially instead of spawning.
 Use when an application owner is in the session.
 
 ```
-/threat-model interview targets/alsa
-/threat-model interview targets/alsa --design-doc targets/alsa/README.md
+/bughunt-threat-model interview targets/alsa
+/bughunt-threat-model interview targets/alsa --design-doc targets/alsa/README.md
 ```
 
 Without `--design-doc` the interview opens cold by asking the owner to
@@ -93,8 +93,8 @@ the draft unattended, then the interview spends owner time only on what the
 code couldn't answer.
 
 ```
-/threat-model bootstrap targets/drlibs/
-/threat-model interview targets/drlibs/ --seed targets/drlibs/THREAT_MODEL.md
+/bughunt-threat-model bootstrap targets/drlibs/
+/bughunt-threat-model interview targets/drlibs/ --seed targets/drlibs/THREAT_MODEL.md
 ```
 
 The interview will focus on the bootstrap's open questions instead of starting
@@ -104,7 +104,7 @@ cold.
 
 Bootstrap writes per-stage checkpoints to `./.threat-model-state/` in the
 current working directory (cwd-confined by `checkpoint.py`). If a run is
-interrupted, re-invoking `/threat-model bootstrap <target-dir>` from the same
+interrupted, re-invoking `/bughunt-threat-model bootstrap <target-dir>` from the same
 working directory
 resumes from the last completed stage — the research swarm is not re-spawned
 if Stage 1 already landed. Pass `--fresh` to start over. The state directory

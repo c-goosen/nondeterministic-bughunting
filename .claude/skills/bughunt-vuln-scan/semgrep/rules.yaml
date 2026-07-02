@@ -1,0 +1,40 @@
+# Local offline rules for vuln-scan Step 0 (no Semgrep Registry / --config auto).
+# High-signal seeds only; LLM hunt does the deep review.
+rules:
+  - id: local.js.child-process-exec
+    languages: [javascript, typescript]
+    message: child_process exec/spawn sink
+    severity: WARNING
+    pattern-either:
+      - pattern: require('child_process').exec(...)
+      - pattern: require('child_process').execSync(...)
+      - pattern: require('child_process').spawn(...)
+      - pattern: child_process.exec(...)
+      - pattern: child_process.spawn(...)
+
+  - id: local.js.eval
+    languages: [javascript, typescript]
+    message: dynamic code evaluation
+    severity: ERROR
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: vm.runInNewContext(...)
+
+  - id: local.py.subprocess-shell
+    languages: [python]
+    message: subprocess with shell=True
+    severity: ERROR
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+
+  - id: local.js.hardcoded-secret
+    languages: [javascript, typescript]
+    message: possible hardcoded secret assignment
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "..."
+          - pattern: $VAR = '...'
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(password|secret|api[_-]?key|token|private[_-]?key).*

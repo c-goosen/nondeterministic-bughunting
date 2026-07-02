@@ -1,8 +1,8 @@
-# /threat-model bootstrap
+# /bughunt-threat-model bootstrap
 
 > **Re-read note:** If you need this file mid-session and the Read tool
 > reports "file unchanged", the prior result was evicted from context; reload
-> with `cat .claude/skills/threat-model/bootstrap.md` via Bash.
+> with `cat .claude/skills/bughunt-threat-model/bootstrap.md` via Bash.
 
 Derive a threat model from **code + past vulnerabilities** when no application
 owner is available. Five stages: spawn a parallel research swarm, synthesize
@@ -48,7 +48,7 @@ from `<target-dir>`'s own git history and public advisories.
 On large codebases the Stage-1 swarm can exhaust context or hit rate limits
 before Stage 5 emits `THREAT_MODEL.md`. Stage state persists to
 `./.threat-model-state/` (in the **current working directory**, not
-`<target-dir>`) so a fresh `/threat-model bootstrap` session can resume
+`<target-dir>`) so a fresh `/bughunt-threat-model bootstrap` session can resume
 without re-spawning the swarm. The state dir is cwd-relative because
 `checkpoint.py` confines all paths to cwd as a guard against prompt-injected
 writes outside the repo.
@@ -368,7 +368,7 @@ Populate `## 6. Open questions` with everything the code couldn't tell you:
   upstream of this?")
 - Risk appetite ("Is DoS acceptable for this use case?")
 
-These seed a later `/threat-model interview --seed THREAT_MODEL.md`
+These seed a later `/bughunt-threat-model interview --seed THREAT_MODEL.md`
 pass.
 
 Populate `## 8. Recommended mitigations` from the Stage-3c working notes: one
@@ -414,7 +414,7 @@ Hand back to the user:
 1. Path to the file.
 2. Top 5 threats (id, threat, impact × likelihood).
 3. Count of threats with evidence vs without (shows gap-fill ran).
-4. Stage-3b sibling locations as candidate leads for `/vuln-scan` or the
+4. Stage-3b sibling locations as candidate leads for `/bughunt-vuln-scan` or the
    pipeline `find` stage.
 5. The section 8 recommended mitigations, top 3 by (closes_class, effort asc).
 6. The section 6 open questions, framed as "ask the owner".

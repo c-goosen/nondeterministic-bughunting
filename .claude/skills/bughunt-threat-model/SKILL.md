@@ -1,5 +1,5 @@
 ---
-name: threat-model
+name: bughunt-threat-model
 description: >-
   Build a threat model for a target codebase. Three modes: "interview" walks an
   application owner through the four-question framework and produces a threat
@@ -26,7 +26,7 @@ allowed-tools:
   - Task
 ---
 
-# threat-model
+# bughunt-threat-model
 
 A threat model answers **"what could go wrong with this system, who would do
 it, and what should we do about it?"** independently of whether any specific
@@ -41,7 +41,7 @@ media parsing") still stands after every known bug is fixed; a vulnerability
 produces threats. Vulnerabilities appear only as **evidence** that raises a
 threat's likelihood score.
 
-**Invocation:** `/threat-model [bootstrap-then-interview|bootstrap|interview] <target-dir> [flags]`
+**Invocation:** `/bughunt-threat-model [bootstrap-then-interview|bootstrap|interview] <target-dir> [flags]`
 
 ---
 

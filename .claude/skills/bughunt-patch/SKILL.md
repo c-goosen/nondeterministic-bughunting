@@ -1,5 +1,5 @@
 ---
-name: patch
+name: bughunt-patch
 description: Generate candidate fixes for verified security findings. Consumes
   TRIAGE.json (preferred), VULN-FINDINGS.json, or a vuln-pipeline results
   directory. Pipeline input is delegated to the execution-verified
@@ -26,9 +26,9 @@ allowed-tools:
   - Bash(jq:*)
 ---
 
-# patch
+# bughunt-patch
 
-Third leg of the static pipeline (`/vuln-scan` → `/triage` → `/patch`).
+Third leg of the static pipeline (`/bughunt-vuln-scan` → `/bughunt-triage` → `/bughunt-patch`).
 Turns a ranked list of verified findings into candidate diffs.
 
 The skill **never applies a diff** to the target repo. Output is inert text
@@ -37,13 +37,13 @@ in `./PATCHES/` for a human to review and apply out-of-band — see
 `--approve` flag by design: the capability isn't present, so it can't be
 prompt-injected into use.
 
-Invoke with `/patch <findings-path> [--repo PATH] [--top N] [--id fNNN]
+Invoke with `/bughunt-patch <findings-path> [--repo PATH] [--top N] [--id fNNN]
 [--model M] [--fresh]`.
 
 **Arguments** (parse from `$ARGUMENTS`):
 - findings path (first positional, required): `TRIAGE.json`,
   `VULN-FINDINGS.json`, a pipeline `results/<target>/<ts>/` directory, or any
-  JSON the `/triage` ingest table recognizes.
+  JSON the `/bughunt-triage` ingest table recognizes.
 - `--repo PATH`: target codebase, read-only (default cwd). Required for
   static mode; the skill stops if cited files don't resolve under it.
 - `--top N`: patch only the N highest-severity true positives (static mode).
@@ -70,7 +70,7 @@ wrong.
 
 ## Checkpointing (runs before Phase 0 and after every phase)
 
-State persists to `./.patch-state/` so a fresh `/patch` session resumes
+State persists to `./.patch-state/` so a fresh `/bughunt-patch` session resumes
 without re-spawning patch or reviewer subagents. All checkpoint I/O goes
 through `python3 .claude/skills/_lib/checkpoint.py` (atomic, JSON-validated).
 The Write→`--from` pattern keeps repo-derived bytes out of Bash argv; never
@@ -132,7 +132,7 @@ Then Bash:
 
 ## Phase 1: Ingest and normalize
 
-Same input contract as `/triage` Phase 1. Normalize every input format to a
+Same input contract as `/bughunt-triage` Phase 1. Normalize every input format to a
 flat `findings[]` of dicts. Pull what's present; never guess what's absent.
 
 ### 1a. Recognized containers (priority order)
@@ -142,7 +142,7 @@ flat `findings[]` of dicts. Pull what's present; never guess what's absent.
    deduped, ranked, owner-tagged.
 2. **`VULN-FINDINGS.json`** — read `.findings[]`. Unverified; print
    `Warning: VULN-FINDINGS.json is unverified scanner output. Consider
-   /triage first.` and continue.
+   /bughunt-triage first.` and continue.
 3. **Pipeline results directory** — one finding per `reports/bug_NN/`.
    Map `report.json` → `description`, `crash.crash_type` → `category`,
    ASAN top-frame → `file`/`line`. Record `bug_id = NN` for the
@@ -578,9 +578,9 @@ Wrote ./PATCHES/bug_NN/, ./PATCHES.md, ./PATCHES.json
 Static mode against the canary fixture:
 
 ```
-/vuln-scan targets/canary
-/triage VULN-FINDINGS.json --repo targets/canary --auto
-/patch TRIAGE.json --repo targets/canary --top 3
+/bughunt-vuln-scan targets/canary
+/bughunt-triage VULN-FINDINGS.json --repo targets/canary --auto
+/bughunt-patch TRIAGE.json --repo targets/canary --top 3
 ```
 
 Expected: three diffs under `PATCHES/bug_00..02/`, each
@@ -591,7 +591,7 @@ Execution-verified mode against pipeline output:
 
 ```
 vuln-pipeline run drlibs --runs 3 --parallel --stream --model <m>
-/patch results/drlibs/<ts>/ --model <m>
+/bughunt-patch results/drlibs/<ts>/ --model <m>
 ```
 
 Expected: delegates to `vuln-pipeline patch`, surfaces

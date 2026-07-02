@@ -21,7 +21,9 @@
       "Bash(checkov:*)",
       "Bash(vuln-pipeline patch:*)",
       "Bash(rtk:*)",
-      "Bash(python3 .claude/skills/_lib/checkpoint.py:*)"
+      "Bash(python3 .claude/skills/_lib/checkpoint.py:*)",
+      "Bash(python3 .claude/skills/bughunt-audit-report/generate-report.py:*)",
+      "Bash(bash .claude/skills/bughunt-vuln-scan/run-semgrep.sh:*)"
     ]
   }
 }
