@@ -68,6 +68,8 @@ the run's JSON artifacts — do not hand-edit generated HTML.
      "target_url": "https://github.com/org/repo",
      "date": "2026-07-02",
      "analysis_type": "Static analysis",
+     "run_model": "claude-opus-4-8",
+     "run_tokens": 1834219,
      "output_dir": "~/security-audit-skill/repo/run-1",
      "scope_bar": "One-line scope bar (may include <code>…</code>).",
      "what_is": {"title": "What X is", "html": "<p>…</p>"},
@@ -87,6 +89,15 @@ the run's JSON artifacts — do not hand-edit generated HTML.
    `focus_areas` defaults to the distinct finding categories, and
    `attack_surfaces` may repeat them — that's fine. Omit `narrative.json`
    entirely and you still get a complete, if terse, report.
+
+   **Run provenance:** `run_model` is the model the orchestrating agent ran
+   the audit on (e.g. `claude-opus-4-8`, `glm-5.2`); `run_tokens` is the total
+   token count for the run (int or numeric string — rendered with thousands
+   separators). Both surface as header meta-cards. If `run_model` is omitted
+   the report falls back to `TRIAGE.json`'s `triage_context.judge_model`; if
+   `run_tokens` is omitted the card shows `—`. Record the actual model you're
+   running under and the run's token usage if you know them — don't guess a
+   number.
 
 3. **Generate.**
    ```

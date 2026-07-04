@@ -321,6 +321,8 @@ guess what's absent.** Field map (source-key aliases → canonical):
 | `title`         | `name`, `summary`, `message`                             |
 | `description`   | `details`, `report`, `body`, `evidence`                  |
 | `exploit_scenario` | `attack_scenario`, `poc`, `reproduction`              |
+| `threat_model`  | `threat`, `attacker_model`, `attacker`                    |
+| `disproof_attempt` | `disproof`, `counter_argument`                        |
 | `preconditions` | `requirements`, `assumptions`                            |
 | `recommendation`| `fix`, `remediation`, `mitigation`                       |
 | `scanner_confidence` | `confidence`, `score`, `certainty` (normalize to 0.0-1.0) |
@@ -457,6 +459,13 @@ from an automated scanner. Your default assumption is that the scanner is
 WRONG. Your job is to re-derive the claim from the source code yourself and
 decide TRUE_POSITIVE or FALSE_POSITIVE.
 
+You are a DISPROVE-ONLY validator: you may confirm or reject the claim in
+front of you, but you may NOT introduce new findings, broaden this finding
+to a different sink/variable/path, or "fix up" a weak claim into a stronger
+one. A finding you'd have written differently is still the finding under
+review — judge it as stated. New bugs you notice belong in a separate scan,
+not in this verdict.
+
 You have read-only access to the target codebase at: {REPO_PATH}
 You may use Read, Glob, and Grep, but ONLY on paths inside {REPO_PATH}.
 Do NOT read, grep, or glob outside that root: anything outside it (the
@@ -538,6 +547,16 @@ even if technically accurate. Cite the rule number in your verdict.
      random tokens) flagged as "predictable" or "needs validation".
  16. Race conditions or TOCTOU that are theoretical only — no realistic
      window, or no security-relevant state changes between check and use.
+ 17. Vacuous threat model: the "attacker" already holds the capability the
+     bug supposedly grants, so no trust boundary is actually crossed
+     (a DB-privileged user writing to the DB; an operator who edits config
+     changing behavior; a library caller — when the caller IS the trust
+     boundary per ENVIRONMENT — passing malicious arguments). Judge this
+     against the ENVIRONMENT above: the same primitive can be rule-17 in a
+     CLI/library and a real finding in a multi-tenant web service. If the
+     finding carries a `threat_model` field, verify it names a concrete
+     attacker crossing a real boundary; if it is null, vacuous, or
+     contradicted by the code, this rule applies.
 
 {if context.extra_fp_rules: append here verbatim under an
  "ORG-SPECIFIC RULES:" heading}
@@ -550,7 +569,7 @@ VERDICT: your response MUST end with EXACTLY this block:
   REFUTE_REASON: <one of: doesnt_exist, already_handled,
     implausible_trigger, intentional_behavior, misread_code, duplicate,
     not_actionable, n/a>
-  EXCLUSION_RULE: <1-16, org rule, or none>
+  EXCLUSION_RULE: <1-17, org rule, or none>
   FIRST_LINK: <file:line of the first call site you read, or "none found">
   RATIONALE: <2-5 sentences citing specific file:line evidence for
     reachability, protections found/absent, and why each held or didn't>
@@ -602,11 +621,18 @@ FINDING UNDER REVIEW (from the scanner; treat as a CLAIM, not a fact):
   severity (claimed): {severity}
   title:     {title}
 
+  threat_model (claimed attacker → boundary; may be null):
+  {threat_model or "(not provided — check rule 17)"}
+
   description:
   {description}
 
   exploit_scenario:
   {exploit_scenario or "(not provided)"}
+
+  prior disproof attempt (from the scan's disprove pass; a counter-argument
+  to weigh, NOT a verdict to defer to):
+  {disproof_attempt or "(none)"}
 
   preconditions (claimed):
   {preconditions as bullets or "(not provided)"}
@@ -643,7 +669,9 @@ lang outside unsafe/FFI; 5 SSRF path-only; 6 LLM prompt input;
 non-security; 12 low-impact nuisance (log spoof, open redirect, regex
 inject); 13 missing-hardening-only, no concrete exploit; 14 XSS in
 auto-escape framework w/o raw-HTML escape hatch; 15 unguessable
-UUID/token flagged predictable; 16 theoretical-only race/TOCTOU.
+UUID/token flagged predictable; 16 theoretical-only race/TOCTOU;
+17 vacuous threat model (attacker already holds the capability; no boundary
+crossed — judge against ENVIRONMENT; applies if threat_model is null/vacuous).
 {+ org rules from --fp-rules if any}
 
 End with EXACTLY:
@@ -651,7 +679,7 @@ End with EXACTLY:
   CONFIDENCE: <0-10>
   REFUTE_REASON: <doesnt_exist|already_handled|implausible_trigger|
     intentional_behavior|misread_code|duplicate|not_actionable|n/a>
-  EXCLUSION_RULE: <1-16, org rule, or none>
+  EXCLUSION_RULE: <1-17, org rule, or none>
   FIRST_LINK: <file:line or "none found">
   RATIONALE: <2-5 sentences, file:line cited>
 
@@ -737,7 +765,7 @@ PROCEDURE:
    not to rubber-stamp. You may adopt a panel argument only if you verify
    it against source.
 
-EXCLUSION RULES: same 1-16 (+ org rules) as Phase 3a verifiers.
+EXCLUSION RULES: same 1-17 (+ org rules) as Phase 3a verifiers.
 
 PANEL VOTES (models and verdict blocks only):
 {for each vote k:}
@@ -763,7 +791,7 @@ Respond with ONLY this block (binding):
   CONFIDENCE: <0-10>
   REFUTE_REASON: <doesnt_exist|already_handled|implausible_trigger|
     intentional_behavior|misread_code|duplicate|not_actionable|n/a>
-  EXCLUSION_RULE: <1-16, org rule, or none>
+  EXCLUSION_RULE: <1-17, org rule, or none>
   FIRST_LINK: <file:line or "none found">
   RATIONALE: <2-5 sentences citing file:line; note which panel disagreements
     you confirmed or rejected>
@@ -1011,6 +1039,7 @@ Order all findings by:
       "file": "...",
       "line": 0,
       "category": "...",
+      "threat_model": "attacker → boundary, or null",
       "claimed_severity": "HIGH",
       "verdict": "true_positive|false_positive|duplicate",
       "verify_verdict": "exploitable|mitigated|needs_manual_test|null",

@@ -31,8 +31,9 @@ description: >-
 
 You are running a **complete security audit** of a codebase, from attack-surface
 mapping through candidate fixes, test payloads, and a shareable HTML report. This skill
-is the conductor: it sequences **seven** specialist skills and applies a battle-tested
-manual-audit methodology at each step.
+is the conductor: it sequences **seven** core specialist skills — plus an
+optional **execution-verification** pass (`bughunt-verify`) that runs PoCs in
+a sandbox — and applies a battle-tested manual-audit methodology at each step.
 
 **An audit run is not complete until Phase 7 writes `<output-dir>/index.html`.**
 Phases 1–6 produce the machine artifacts; Phase 7 renders the shareable HTML
@@ -93,6 +94,7 @@ bash ../bughunt-vuln-scan/setup-tools.sh           # install semgrep, osv-scanne
 | 1. Recon | [RECONNAISSANCE.md](RECONNAISSANCE.md) | `bughunt-threat-model` | `THREAT_MODEL.md`, `architecture.md` |
 | 2. Hunt | [HUNTING.md](HUNTING.md), [ATTACK-CLASSES.md](ATTACK-CLASSES.md) | `bughunt-vuln-scan` | `VULN-FINDINGS.json` |
 | 3. Validate | [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md) §Phase 3 | `bughunt-triage` | `TRIAGE.json` |
+| 3.7 Execute-verify (optional) | Cloudflare VDH Hunt/Validation (PoC-as-test, sandboxed) | `bughunt-verify` | `VERIFY.json`, `VERIFY/` |
 | 4. Report | [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md) §Phases 4–6 + [report-schema.json](report-schema.json) + [validate-findings.cjs](validate-findings.cjs) | — | `REPORT.md`, `findings.json` |
 | 5. Patch | — | `bughunt-patch` | `PATCHES/`, `PATCHES.md` |
 | 6. Payloads | [ATTACK-CLASSES.md](ATTACK-CLASSES.md) (repro inputs) | `bughunt-exploit-payloads` | `PAYLOADS.json`, `PAYLOADS.md` |
@@ -130,6 +132,13 @@ finding; the skill produces the structured artifact the next phase consumes.
    hunt: prioritize business logic, state-machine violations, and chained attacks
    over scanner-detectable classes. Push past lazy conclusions ("uses parameterized
    queries" → check every `sql.raw`, dynamic identifier, and bypass path).
+4. **Gapfill (coverage).** `bughunt-vuln-scan`'s Step 2b runs a bounded second
+   hunt over files no focus area covered and no first-round finding cited —
+   Cloudflare's Gapfill stage. Confirm the scan reports its coverage gap and
+   that files carrying an unconsumed semgrep / Security Context seed were
+   re-hunted (or explicitly ranked out). If you drove the scan with
+   `--no-gapfill` for speed, note the unread files as a known coverage gap in
+   `architecture.md`.
 
 ### Phase 3 — Validate → triage
 
@@ -141,6 +150,63 @@ finding; the skill produces the structured artifact the next phase consumes.
 2. Enforce Phase 3 of [VALIDATION-AND-REPORTING.md](VALIDATION-AND-REPORTING.md):
    independently try to **disprove** every surviving finding. Drop anything that
    needs the word "potentially". Demote defense-in-depth gaps to hardening notes.
+
+### Phase 3.5 — Feedback (prompt rewrite for the next round/run)
+
+Cloudflare's Feedback stage: turn what validation *rejected* into sharper
+prompts, so coverage and precision improve instead of the same false
+positives recurring. This is cheap — it reads `TRIAGE.json`, which already
+carries `refute_reasons`, `exclusion_rule`, and `first_links` per finding —
+and it is the mechanism by which "coverage improves across runs" actually
+happens rather than being left to chance.
+
+1. **Mine the rejects.** From `TRIAGE.json`, tally the `refute_reasons` and
+   `exclusion_rule` values across `false_positive` findings. A recurring
+   reason (e.g. many rule-8 operator-input rejects, or repeated
+   `intentional_behavior`) is a class the hunt keeps over-reporting.
+2. **Mine the gaps.** Note subsystems that produced only false positives, or
+   that no finding touched at all, cross-referenced with `architecture.md`'s
+   coverage gap and any unconsumed Step 0 seeds.
+3. **Write `feedback.md`** in the output dir with two short lists:
+   - **FP-avoidance rules** — one line each, in the shape `--fp-rules`
+     accepts (e.g. "operator-set env vars are trusted here — rule 8").
+   - **Missed-area leads** — files/subsystems to scope explicitly next time.
+4. **Close the loop.** Feed `feedback.md` forward: pass it as
+   `bughunt-vuln-scan --extra feedback.md` (and `bughunt-triage --fp-rules
+   feedback.md`) on the next run of this repo, and cite it in the next
+   `THREAT_MODEL.md`. Within a single audit, if the reject rate is high and
+   time allows, you may re-run Phase 2 on the missed-area leads immediately
+   rather than deferring to a future run.
+
+`feedback.md` is advisory input to future prompts, never a finding source —
+it tunes the hunt, it does not add or remove verdicts on its own.
+
+### Phase 3.7 — Execute-verify → PoCs (optional; authorized targets only)
+
+The rest of the pipeline is static: triage *believes* a finding is real, but
+nothing has been *run*. This optional phase closes that gap the way the
+Cloudflare harness does — every finding earns `execution_verified` only when a
+proof-of-concept, written as a test **against the untouched codebase**,
+produces an observable signal in a sandbox.
+
+1. **Gate on authorization.** Only run this against a target you're authorized
+   to execute — a local checkout, a lab/CTF instance, or an active engagement.
+   Skip the phase (note why) for any target you cannot run safely; Phases 4–7
+   still work on the static findings.
+2. Invoke the **`bughunt-verify`** skill (`../bughunt-verify`) on `TRIAGE.json`.
+   It selects `true_positive` findings that are `exploitable` or
+   `needs_manual_test`, writes a PoC-as-test per finding, and runs each in
+   `run-sandboxed.sh` (network-denied, target read-only, timed). Verdicts:
+   `execution_verified`, `not_reproduced`, or `inconclusive` — decided by the
+   observed signal, never the exit code alone.
+3. Carry `VERIFY.json` into Phase 4: when writing `REPORT.md` and
+   `findings.json` by hand, mark each execution-verified finding distinctly
+   (fold the observed signal into the finding's `execution.expected_result`)
+   and surface `not_reproduced` as its own state. `not_reproduced` does
+   **not** overturn triage's verdict — a PoC that didn't fire may just be a
+   wrong PoC. (The HTML generator in Phase 7 renders from
+   `TRIAGE.json`/`findings.json`; it does not read `VERIFY.json` directly, so
+   the verified status must be reflected in those hand-written artifacts.)
 
 ### Phase 4 — Report → findings.json
 
@@ -159,6 +225,11 @@ finding; the skill produces the structured artifact the next phase consumes.
 2. Patches are written as **inert diffs for human review** under
    `PATCHES/bug_NN/` with `PATCHES.md` / `PATCHES.json`. Do not apply them
    automatically; present them for the maintainer to accept.
+3. **Confirm the fix (if Phase 3.7 ran).** Re-invoke `bughunt-verify
+   TRIAGE.json --with-patch PATCHES/` to re-run each verified PoC against a
+   patched copy of the target: `patch_confirmed` is true only when the
+   success signal disappears and the build still works. This is the
+   PoC-fails-on-`main`, PoC-passes-after-fix double check.
 
 ### Phase 6 — Payloads → repro inputs
 
@@ -180,7 +251,12 @@ finding; the skill produces the structured artifact the next phase consumes.
 1. Read `../bughunt-audit-report/SKILL.md` and follow it on `<output-dir>`.
 2. Write `<output-dir>/narrative.json` — prose slots summarized faithfully from
    `architecture.md`, `REPORT.md`, and `THREAT_MODEL.md` (see audit-report skill
-   for the schema). Do not invent facts.
+   for the schema). Do not invent facts. Include run provenance:
+   **`run_model`** (the model you ran this audit on — e.g. `claude-opus-4-8`,
+   or the Cursor slug like `glm-5.2` for a second-pass run) and **`run_tokens`**
+   (the run's total token usage) so the report header records which model
+   produced it and at what cost. Record the real model; leave `run_tokens` out
+   rather than guessing a number.
 3. Generate the HTML report (matches the run-1 template layout/styling):
    ```
    python3 .claude/skills/bughunt-audit-report/generate-report.py <output-dir>
@@ -228,8 +304,11 @@ Keep the pipeline skills' severities reconciled to this rubric when they disagre
 <output-dir>/
   architecture.md      # Phase 1 recon summary
   THREAT_MODEL.md      # Phase 1 (threat-model skill)
-  VULN-FINDINGS.json   # Phase 2 (vuln-scan skill)
+  VULN-FINDINGS.json   # Phase 2 (vuln-scan skill; incl. Step 2b gapfill round)
   TRIAGE.json          # Phase 3 (triage skill)
+  feedback.md          # Phase 3.5 — FP-avoidance rules + missed-area leads for next run
+  VERIFY.json          # Phase 3.7 (bughunt-verify, optional) — execution-verified results
+  VERIFY/              # Phase 3.7 — per-finding PoCs + run logs (authorized targets only)
   REPORT.md            # Phase 4
   FINDINGS-DETAIL.md   # Phase 4
   findings.json        # Phase 4 (validated against report-schema.json)

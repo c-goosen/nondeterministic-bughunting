@@ -21,6 +21,7 @@ from, and under which terms. Full license texts are in [`LICENSES/`](LICENSES/).
 | `.claude/skills/bughunt-security-audit/report-schema.json` | cloudflare/security-audit-skill | MIT | Cloudflare, Inc. 2025-2026 |
 | `.claude/skills/bughunt-security-audit/validate-findings.cjs` | cloudflare/security-audit-skill | MIT | Cloudflare, Inc. 2025-2026 |
 | `.claude/skills/bughunt-security-audit/SKILL.md` | net-new (this repo) | MIT | Christo Goosen, 2026 |
+| `.claude/skills/bughunt-verify/` | net-new (this repo) | MIT | Christo Goosen, 2026 |
 
 ## 1. Anthropic — defending-code reference harness
 
@@ -35,7 +36,7 @@ pipeline and the structured artifacts that flow between stages
 
 **Modifications** (per Apache-2.0 §4(b), changes are stated here):
 
-- `threat-model`, `triage`, `patch` — vendored unmodified; orchestrated by the
+- `threat-model`, `patch` — vendored unmodified; orchestrated by the
   `bughunt-security-audit` skill rather than altered.
 - `vuln-scan` — **modified**. Added a deterministic pre-scan layer
   (Steps 0–0e) that wraps five external scanners — semgrep, osv-scanner, grype
@@ -45,9 +46,20 @@ pipeline and the structured artifacts that flow between stages
   output; added `setup-tools.sh` to install the scanners; and restructured the
   per-subagent review brief into four passes (seeds → invariant decomposition
   → hunt → "what else?" escalation) with a context-budget directive, informed
-  by the methodology in §5. These additions are original to this repo and
-  offered under the MIT License (Copyright (c) 2026 Christo Goosen); the
-  surrounding Apache-2.0 skill retains its original license.
+  by the methodology in §5. Additionally, per the Cloudflare harness post
+  (§5): a required per-finding `threat_model` field (attacker → boundary) that
+  rejects vacuous findings; a Step 2b coverage-**gapfill** round that re-hunts
+  files no focus area covered; and a Step 3b reframe from a confidence score
+  into an adversarial **disprove** pass (records `disproof_attempt`, never
+  drops). These additions are original to this repo and offered under the MIT
+  License (Copyright (c) 2026 Christo Goosen); the surrounding Apache-2.0 skill
+  retains its original license.
+- `triage` — **modified**. Added exclusion rule 17 (vacuous threat model),
+  a disprove-only constraint on verifiers/judge (they may reject or confirm
+  but not introduce new findings or broaden scope), and ingest/output of the
+  `threat_model` and `disproof_attempt` fields — all per the Cloudflare harness
+  post (§5). Offered under the MIT License (Copyright (c) 2026 Christo Goosen);
+  the surrounding Apache-2.0 skill retains its original license.
 
 ## 2. Cloudflare — security-audit skill
 
@@ -73,6 +85,13 @@ at each phase. It is offered under the MIT License (Copyright (c) 2026 Christo
 Goosen). It does **not** relicense the upstream components above: each retains the
 license listed in its row of the summary table.
 
+`.claude/skills/bughunt-verify/` (SKILL.md + `run-sandboxed.sh`) is net-new for
+this repo, offered under the MIT License (Copyright (c) 2026 Christo Goosen). It
+implements the execution-verification methodology from the Cloudflare "Build
+your own vulnerability harness" post (§5): PoC-as-test against untouched source,
+an `unshare`/`bwrap`-based sandbox with network denied, a verdict decided by the
+observed signal, and a PoC-fails-then-patch-passes double check.
+
 ## 4. Invoked external tools (not redistributed)
 
 The modified `bughunt-vuln-scan` skill *invokes* the following scanners at runtime. They
@@ -90,6 +109,17 @@ from their own upstreams under their own licenses:
 No code or text from the sources below is bundled in this repo; they are
 credited as intellectual influences on the pipeline's prompting and slicing
 approach.
+
+- **Cloudflare — "Build your own vulnerability harness"**
+  (https://blog.cloudflare.com/build-your-own-vulnerability-harness/). Source
+  of the execution-verification design in `bughunt-verify` (PoC-as-test against
+  untouched source, `unshare`-based sandbox, signal-not-status verdicts,
+  patch double-check), the required per-finding threat-model gate, the
+  coverage-gapfill round and feedback loop, and the disprove-only validator
+  framing added to `bughunt-vuln-scan` and `bughunt-triage`. No Cloudflare code
+  or text is bundled for these; the post is an intellectual influence only. (The
+  separate `cloudflare/security-audit-skill` files in §2 *are* vendored, under
+  their MIT license.)
 
 - **Devansh — "Needle in the Haystack: LLMs for Vulnerability Research"**
   (https://devansh.bearblog.dev/needle-in-the-haystack/). Source of the

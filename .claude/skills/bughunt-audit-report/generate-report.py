@@ -47,7 +47,23 @@ NARRATIVE_KEYS = (
     "analysis_type", "scope_bar", "what_is", "tech_stack", "trust_actors",
     "attack_surfaces", "threat_highlights", "focus_areas", "hunt_output",
     "triage_method_note", "exec_summary", "highest_impact", "does_well",
+    "run_model", "run_tokens",
 )
+
+
+def fmt_tokens(v):
+    """Render a token count with thousands separators; pass through non-numeric."""
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, (int, float)):
+        return f"{int(v):,}"
+    s = str(v).strip()
+    digits = s.replace(",", "").replace("_", "")
+    if digits.isdigit():
+        return f"{int(digits):,}"
+    return s
 
 
 def esc(s):
@@ -232,6 +248,13 @@ def render(outdir):
     target_html = f'<a href="{esc(target_url)}" style="color:var(--accent);text-decoration:none">{esc(target)}</a>' if target_url else esc(target)
     outdir_disp = narr.get("output_dir", str(outdir))
 
+    # Run provenance: the model the orchestrating agent ran on, and total tokens.
+    # Prefer explicit narrative values; fall back to the triage panel's judge
+    # model when the run model wasn't recorded separately.
+    triage_ctx = triage.get("triage_context") or {}
+    run_model = narr.get("run_model") or triage_ctx.get("run_model") or triage_ctx.get("judge_model") or "—"
+    tokens_disp = fmt_tokens(narr.get("run_tokens") if narr.get("run_tokens") is not None else triage_ctx.get("run_tokens")) or "—"
+
     parts = [f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -258,6 +281,8 @@ def render(outdir):
       <div class="meta-card {highest_cls}"><div class="label">Highest severity</div><div class="value big">{esc(highest_label)}</div></div>
       <div class="meta-card"><div class="label">Patches (inert)</div><div class="value big">{len(patches)}</div></div>
       <div class="meta-card"><div class="label">Test payloads</div><div class="value big">{len(payloads)}</div></div>
+      <div class="meta-card"><div class="label">Model</div><div class="value">{esc(run_model)}</div></div>
+      <div class="meta-card"><div class="label">Tokens used</div><div class="value big">{esc(tokens_disp)}</div></div>
       <div class="meta-card"><div class="label">Output directory</div><div class="value" style="font-family:var(--mono);font-size:.8rem">{esc(outdir_disp)}</div></div>
     </div>
   </div>

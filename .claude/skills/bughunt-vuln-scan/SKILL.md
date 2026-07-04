@@ -71,11 +71,14 @@ content into a shell interpreter.
   (after the category list). Use to add org-specific vulnerability classes,
   compliance checks, or stack-specific patterns. Plain text; same shape as
   the category blocks below.
-- `--no-score` — skip the Step 3b confidence pass (saves a round of
-  subagents). Findings keep the scanner's self-reported confidence only.
+- `--no-score` — skip the Step 3b adversarial disprove pass (saves a round
+  of subagents). Findings keep the hunt's self-reported confidence and carry
+  no `disproof_attempt`.
 - `--no-semgrep` — skip **all** deterministic pre-scans (Steps 0–0e: semgrep,
   osv-scanner, grype, gitleaks, checkov). Use when the tools are unavailable or
   you want a purely LLM-driven pass.
+- `--no-gapfill` — skip the Step 2b coverage-gapfill round (the second hunt
+  over files no focus area covered). Faster; leaves unscoped files unread.
 
 ## Setup — install the scanners (once)
 
@@ -406,6 +409,16 @@ story at all — but if you're unsure whether something is real, REPORT IT
 with a low confidence score rather than dropping it. A downstream triage
 step does the rigorous verification; your job is to not miss things.
 
+THREAT MODEL (required per finding). Before you emit a finding, state its
+threat model in one line: WHO the attacker is (their starting position and
+privileges) and WHICH boundary the bug lets them cross. A finding whose
+"attack" grants a capability the attacker already has is VACUOUS — do not
+report it. Examples of vacuous claims to drop: "a DB-privileged user can
+write to the DB", "an operator who can edit the config can change behavior",
+"a caller of this library can pass it bad arguments" (for a library whose
+caller is already the trust boundary). If you cannot name a concrete
+attacker who gains something across a real boundary, it is not a finding.
+
 WHAT TO LOOK FOR (reference — consult, don't transcribe):
 
   MEMORY SAFETY (C/C++ and unsafe/FFI blocks) — HIGH VALUE:
@@ -456,6 +469,7 @@ OUTPUT — one block per finding, nothing else:
 <severity>{HIGH | MEDIUM | LOW}</severity>
 <confidence>{0.0-1.0}</confidence>
 <title>{one line}</title>
+<threat_model>{attacker (starting position + privileges) → boundary crossed. One line. Must be concrete and non-vacuous — see THREAT MODEL bar above.}</threat_model>
 <description>{root cause, attacker control, trigger condition, data flow from entry to sink. Cite line numbers.}</description>
 <exploit_scenario>{concrete attack: what input, from where, causing what outcome}</exploit_scenario>
 <recommendation>{specific fix: parameterize the query, bounds-check before memcpy, etc.}</recommendation>
@@ -469,13 +483,49 @@ If you find nothing reportable in your area after a thorough read, emit a
 single <finding> with category=none and a one-line note of what you covered.
 ```
 
+## Step 2b — Coverage gapfill (skip with `--no-gapfill` or `--single`)
+
+The first fan-out covers the focus areas you scoped — but a bug in code no
+focus area named is a bug no agent read. This step closes that gap within a
+single scan (Cloudflare's "Gapfill" stage), bounded to **one** extra round
+so it can't loop.
+
+1. **Compute coverage.** List the target's source files (same enumeration as
+   Step 1). Mark a file *covered* if it falls under a scoped focus area OR a
+   Step 2 finding cites it. The rest are the **coverage gap**.
+2. **Rank the gap.** Drop files the DO-NOT-REPORT list already excludes
+   (tests, fixtures, docs, build scripts, generated code, vendored deps).
+   From what remains, keep files that (a) carry a Step 0 semgrep/Security
+   Context seed no agent consumed, (b) sit on an input path (parsers,
+   handlers, deserialization, FFI/`unsafe`), or (c) are large/central by
+   import count. If the ranked gap is empty, note "full coverage" and skip
+   to Step 3.
+3. **Re-hunt.** Group the ranked gap into up to 5 new focus areas and spawn
+   one Task subagent per area with the **same review brief** as Step 2
+   (including the THREAT MODEL bar). Cap total concurrency at 10. Tag their
+   findings `source: "agent-gapfill"`.
+4. Fold the new `<finding>` blocks into the Step 3 collation exactly like
+   the first round. Report the gap size and how many files the gapfill round
+   newly covered.
+
+Skip this step on tiny targets (`--single` path) — one pass already reads
+everything.
+
 ## Step 3 — Collate
 
 1. Collect `<finding>` blocks from all subagents. Drop `category=none`
    placeholders. Tag each with `source: "agent"` (or `source: "semgrep"` if
    the subagent confirmed it from a seed).
+   Findings that omit `<threat_model>`, or whose threat model is vacuous
+   (the attacker already holds the capability the bug grants — see the
+   THREAT MODEL bar in the review brief), are kept but flagged: set
+   `threat_model: null` and add `"vacuous_threat_model"` to a
+   `collate_notes` list so triage's rule-17 gate catches them. Do not drop
+   them here — this skill never drops; triage decides.
 2. **Merge the deterministic tool findings** directly (they skip subagent
-   confirmation but still flow through scoring and triage):
+   confirmation but still flow through scoring and triage). These carry no
+   agent-authored threat model; set `threat_model: null` (the advisory /
+   secret / misconfig itself is the finding, and triage judges reachability):
    - Steps 0b/0c (osv-scanner, grype) → `category: "known-vulnerable-dependency"`,
      `source: "osv"` | `"grype"`, advisory id in the title, fixed-version range
      in the recommendation. De-dupe osv vs grype on
@@ -488,20 +538,29 @@ single <finding> with category=none and a one-line note of what you covered.
 4. Assign stable ids `F-001`, `F-002`, ... in (severity desc, file, line)
    order.
 
-## Step 3b — Confidence pass (skip if `--no-score`)
+## Step 3b — Adversarial disprove pass (skip if `--no-score`)
 
-A cheap second-opinion read that **ranks** findings by signal quality.
-**Nothing is dropped** — this pass calibrates `confidence` so humans and
-`/bughunt-triage` see high-signal findings first. Spawn **one Task subagent per
-finding** in parallel with the brief below. Shallow: re-read and score, not
-a full reachability trace.
+An independent agent whose **sole job is to disprove each finding** — not to
+confirm it, not to log findings of its own. This is the discovery-stage
+mirror of Cloudflare's validator: a model that grades its own hunt inherits
+its own blind spots, so a fresh agent argues the opposite side. The disprove
+pass **never drops a finding** (that is `/bughunt-triage`'s call); it records the
+strongest counter-argument and calibrates `confidence` down when the
+disproof lands, so humans and triage see the best-supported findings first.
+Spawn **one Task subagent per finding** in parallel with the brief below.
 
-### Scoring brief (per finding)
+**Independence:** set `subagent_type` and give each disprover ONLY its one
+finding — never the other findings, never the hunt agent's reasoning. A
+disprover that sees the hunt rationale rubber-stamps it.
+
+### Disprove brief (per finding)
 
 ```
-You are giving ONE candidate security finding an independent confidence
-score. You are NOT deciding whether to keep it — every finding is kept.
-You are deciding how likely it is to survive rigorous triage.
+You are a skeptical reviewer trying to DISPROVE one candidate security
+finding from an automated hunt. Your default assumption is that it is WRONG.
+You CANNOT log findings of your own and you CANNOT broaden the claim — your
+only outputs are (a) the strongest reason this finding is false or vacuous,
+and (b) a confidence score for whether it survives rigorous triage.
 
 FINDING:
 {the full <finding> block}
@@ -509,29 +568,39 @@ FINDING:
 TARGET: {target_dir} (you may Read/Grep inside it; do NOT execute)
 
 STEP 1 — Re-read the cited code. Open {file} around line {line}. Does the
-code actually do what the description claims?
+code actually do what the description claims, or did the hunt misread it?
 
-STEP 2 — Check against common false-positive patterns (volumetric DoS,
-memory-safe language, test/fixture/doc file, framework auto-escape, env-var
-vector, missing-hardening-only, regex/log injection, outdated dep). A match
-lowers confidence sharply but does not auto-zero it.
+STEP 2 — Attack the threat model. Is the stated attacker → boundary real, or
+does the "attacker" already hold the capability (vacuous — triage rule 17)?
+Name the boundary that is or isn't crossed.
 
-STEP 3 — Score 1-10 that this is a real, actionable vulnerability:
-  1-3  likely false positive or noise
-  4-5  plausible but speculative
-  6-7  credible, needs investigation
-  8-10 high confidence, clear pattern
+STEP 3 — Hunt for the disproof: an upstream check, a type/length constraint,
+framework auto-escaping, an auth gate, unreachable/dead/test code, or a
+common false-positive pattern (volumetric DoS, memory-safe language,
+env-var/operator vector, missing-hardening-only, regex/log injection,
+outdated dep). State the single strongest one you found, or "none found".
+
+STEP 4 — Score 1-10 that this is a real, actionable vulnerability despite
+your best attempt to disprove it:
+  1-3  disproof succeeded — likely false positive or vacuous
+  4-5  disproof plausible but not conclusive
+  6-7  survived; credible, needs investigation
+  8-10 survived a real disproof attempt; clear pattern
 
 OUTPUT (exactly this, nothing else):
   CONFIDENCE: <1-10>
-  REASON: <one line>
+  DISPROOF: <the strongest counter-argument, or "none found">
+  REASON: <one line: why the score>
 ```
 
 **Resolve:** overwrite each finding's `confidence` with the score
-(normalized to 0.0-1.0) and attach `confidence_reason`. Re-sort findings
-by (`confidence` desc, `severity` desc, `file`, `line`) and reassign ids
-`F-001..` in that order. Compute `low_confidence_count` = findings with
-confidence < 0.4, for the summary line.
+(normalized to 0.0-1.0), attach `confidence_reason` (the REASON line), and
+attach `disproof_attempt` (the DISPROOF line — carried into
+`VULN-FINDINGS.json` so triage starts from the best counter-argument, not a
+blank slate). Re-sort findings by (`confidence` desc, `severity` desc,
+`file`, `line`) and reassign ids `F-001..` in that order. Compute
+`low_confidence_count` = findings with confidence < 0.4, for the summary
+line.
 
 ## Step 4 — Write output
 
@@ -554,16 +623,18 @@ Write **both** files to `<target-dir>/`:
       "confidence": 0.9,
       "source": "agent",
       "title": "...",
+      "threat_model": "unauthenticated HTTP client → arbitrary file read outside webroot",
       "description": "...",
       "exploit_scenario": "...",
       "recommendation": "...",
-      "confidence_reason": "..."
+      "confidence_reason": "...",
+      "disproof_attempt": "strongest counter-argument from the disprove pass, or 'none found'"
     }
   ],
   "summary": {
     "total": 0, "high": 0, "medium": 0, "low": 0, "low_confidence": 0,
     "tools": {"semgrep": false, "osv": false, "grype": false, "gitleaks": false, "checkov": false, "security_context": false},
-    "by_source": {"agent": 0, "semgrep": 0, "osv": 0, "grype": 0, "gitleaks": 0, "checkov": 0}
+    "by_source": {"agent": 0, "agent-gapfill": 0, "semgrep": 0, "osv": 0, "grype": 0, "gitleaks": 0, "checkov": 0}
   }
 }
 ```
