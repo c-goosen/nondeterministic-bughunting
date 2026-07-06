@@ -72,10 +72,17 @@ Establish two paths before starting:
 
 - **Target** — the codebase to audit (from the user's request, else the current
   working directory).
-- **Output directory** — where every artifact goes. Ask the user, or default to
-  `~/security-audit-skill/<repo-name>/run-<N>` where `<N>` is the next unused
-  integer (check with `ls`). Separate runs → separate directories; coverage
-  improves across runs.
+- **Output directory** — where every artifact goes. Resolve it in this order,
+  and **never default to `~/security-audit-skill/*`**:
+  1. If running inside the `nondeterministic-bughunting` repo (a `targets/`
+     directory exists at the repo root), default to
+     `targets/<repo-name>/run-<N>` — keep audit artifacts next to the audited
+     target, in-repo.
+  2. Otherwise, **ask the user** which directory to place output in, and
+     prompt them to create a directory for it rather than assuming one.
+
+  `<N>` is the next unused integer (check with `ls`). Separate runs → separate
+  directories; coverage improves across runs.
 
 If prior runs exist for this repo, read their `findings.json` / `TRIAGE.json`
 first: skip known findings, target gaps, and resolve prior disagreements.

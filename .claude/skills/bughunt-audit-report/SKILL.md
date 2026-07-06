@@ -32,7 +32,8 @@ artifact — the recon narrative and executive summary — and that goes in a
 `narrative.json` the script reads.
 
 Invoke with `/bughunt-audit-report <output-dir>` where `<output-dir>` is the run
-directory (e.g. `~/security-audit-skill/<repo>/run-<N>`).
+directory (e.g. `targets/<repo>/run-<N>` in-repo; never
+`~/security-audit-skill/*`).
 
 **Visual template:** the canonical layout/CSS is exemplified by
 `~/security-audit-skill/openclaw/run-1/index.html`. This skill's
@@ -70,7 +71,7 @@ the run's JSON artifacts — do not hand-edit generated HTML.
      "analysis_type": "Static analysis",
      "run_model": "claude-opus-4-8",
      "run_tokens": 1834219,
-     "output_dir": "~/security-audit-skill/repo/run-1",
+     "output_dir": "targets/repo/run-1",
      "scope_bar": "One-line scope bar (may include <code>…</code>).",
      "what_is": {"title": "What X is", "html": "<p>…</p>"},
      "tech_stack": ["TypeScript on Node 22", "SQLite via Kysely"],
