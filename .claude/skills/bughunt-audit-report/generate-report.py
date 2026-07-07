@@ -80,6 +80,57 @@ def load(d, name):
         return None
 
 
+def norm_finding_id(fid):
+    """Normalize f001 / F-001 / F001 to the same key for cross-artifact joins."""
+    return (fid or "").upper().replace("-", "")
+
+
+def resolve_severity(f):
+    """Severity from triage row, vuln-scan row, or findings.json object."""
+    for key in ("derived_severity", "severity_label", "claimed_severity"):
+        v = f.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    sev = f.get("severity")
+    if isinstance(sev, str) and sev.strip():
+        return sev.strip().upper()
+    if isinstance(sev, dict):
+        overall = sev.get("overall_severity")
+        if isinstance(overall, str) and overall.strip():
+            return overall.strip().upper()
+    return "INFO"
+
+
+def resolve_verdict(f):
+    """TRUE_POSITIVE / FALSE_POSITIVE from triage variants."""
+    v = f.get("verifier_verdict") or f.get("verdict") or ""
+    return str(v).upper().replace("-", "_")
+
+
+def resolve_verify_outcome(f):
+    """exploitable / needs_manual_test from triage variants."""
+    return f.get("verify_outcome") or f.get("verify_verdict") or ""
+
+
+def resolve_first_link(f):
+    links = f.get("first_links")
+    if isinstance(links, list) and links:
+        return links[0]
+    return f.get("first_link") or ""
+
+
+def normalize_finding(f):
+    """Unify field names expected by render helpers."""
+    row = dict(f)
+    row["derived_severity"] = resolve_severity(row)
+    row["verifier_verdict"] = resolve_verdict(row)
+    row["verify_outcome"] = resolve_verify_outcome(row)
+    link = resolve_first_link(row)
+    if link:
+        row["first_link"] = link
+    return row
+
+
 def sev_badge(sev):
     sev = (sev or "INFO").upper()
     return f'<span class="sev {SEV_CLASS.get(sev, "sev-info")}">{esc(sev)}</span>'
@@ -198,22 +249,37 @@ CSS = """
 def render(outdir):
     triage = load(outdir, "TRIAGE.json") or {}
     vuln_doc = load(outdir, "VULN-FINDINGS.json") or {}
-    vuln_by_id = {f.get("id"): f for f in vuln_doc.get("findings", []) if f.get("id")}
+    vuln_by_id = {}
+    for f in vuln_doc.get("findings", []):
+        fid = f.get("id")
+        if fid:
+            vuln_by_id[norm_finding_id(fid)] = f
     patches_doc = load(outdir, "PATCHES.json") or {}
     payloads_doc = load(outdir, "PAYLOADS.json") or {}
     findings_json = load(outdir, "findings.json")
     narr = load(outdir, "narrative.json") or {}
 
+    # findings.json confirmed entries keyed by title for severity fallback
+    confirmed_by_title = {}
+    if isinstance(findings_json, list):
+        for cf in findings_json:
+            if cf.get("verdict") == "confirmed" and cf.get("title"):
+                confirmed_by_title[cf["title"]] = cf
+
     findings = []
     for f in triage.get("findings", []):
         row = dict(f)
-        vf = vuln_by_id.get(row.get("id"))
+        vf = vuln_by_id.get(norm_finding_id(row.get("id")))
         if vf:
             for key in ("title", "category", "file", "line", "description", "severity"):
                 row.setdefault(key, vf.get(key))
-            if not row.get("first_link") and vf.get("file"):
+            if not resolve_first_link(row) and vf.get("file"):
                 row.setdefault("first_link", f"{vf['file']}:{vf.get('line', '')}")
-        findings.append(row)
+        if not resolve_severity(row) or resolve_severity(row) == "INFO":
+            cf = confirmed_by_title.get(row.get("title", ""))
+            if cf:
+                row.setdefault("severity", cf.get("severity"))
+        findings.append(normalize_finding(row))
     summary = triage.get("summary", {})
     target = triage.get("target") or narr.get("target") or Path(outdir).parent.name
     run = triage.get("run") or narr.get("run") or Path(outdir).name
@@ -222,8 +288,20 @@ def render(outdir):
 
     by_sev = summary.get("by_severity", {})
     by_outcome = summary.get("by_verify_outcome", {})
-    tp = summary.get("true_positive", sum(1 for f in findings if f.get("verifier_verdict") == "TRUE_POSITIVE"))
-    fp = summary.get("false_positive", sum(1 for f in findings if f.get("verifier_verdict") == "FALSE_POSITIVE"))
+    tp = summary.get(
+        "true_positives",
+        summary.get(
+            "true_positive",
+            sum(1 for f in findings if f.get("verifier_verdict") == "TRUE_POSITIVE"),
+        ),
+    )
+    fp = summary.get(
+        "false_positives",
+        summary.get(
+            "false_positive",
+            sum(1 for f in findings if f.get("verifier_verdict") == "FALSE_POSITIVE"),
+        ),
+    )
 
     # highest severity present among true positives
     highest = None
@@ -440,7 +518,7 @@ def phase_hunt(narr, findings):
 
 def phase_validate(narr, findings, summary, tp, fp):
     by_outcome = summary.get("by_verify_outcome", {})
-    dupes = summary.get("duplicates_collapsed", 0)
+    dupes = summary.get("duplicates_collapsed", summary.get("duplicates", 0))
     # group ids by outcome
     outcome_ids = {}
     for f in findings:
