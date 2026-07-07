@@ -85,7 +85,9 @@ runtimes):
   each verified PoC is re-run against a patched copy to confirm the fix
   (Step 3b).
 - `--jobs N` (default 3): max PoCs built/run concurrently.
-- `--timeout S` (default 60): per-PoC wall-clock limit inside the sandbox.
+- `--timeout S` (default 300): per-PoC wall-clock limit inside the sandbox.
+  A PoC that has to build/compile can be slow, so the default is generous;
+  lower it for quick PoCs or raise it further for heavy builds.
 - `--no-sandbox`: run PoCs without isolation. Refused by default; requires an
   explicit acknowledgement that the target is a disposable lab environment.
 
