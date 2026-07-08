@@ -32,9 +32,12 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # Resource limits + timeout applied INSIDE every mechanism, so the guarantee
 # is uniform regardless of which sandbox is available.
-CPU_LIMIT=${BUGHUNT_CPU_LIMIT:-30}      # seconds of CPU time
+CPU_LIMIT=${BUGHUNT_CPU_LIMIT:-120}     # seconds of CPU time
 FSIZE_LIMIT=${BUGHUNT_FSIZE_LIMIT:-524288}  # blocks (~256MB) max file write
-DEFAULT_TIMEOUT=60
+# Wall-clock cap per PoC when --timeout is not passed. Generous by default so a
+# PoC that has to build/compile isn't cut off prematurely; override with
+# BUGHUNT_TIMEOUT (seconds) or the --timeout flag.
+DEFAULT_TIMEOUT=${BUGHUNT_TIMEOUT:-300}
 
 # Emit a shell preamble that clamps resources, then execs the payload.
 # Core dumps are disabled (ASAN reports to stderr; we don't want core spam),
@@ -114,8 +117,9 @@ cmd_run() {
               -- bash -c "$pre" bash "$@"
       ;;
     firejail)
-      # firejail timeout is hh:mm:ss.
-      local hz; hz="$(printf '00:%02d:%02d' $((timeout/60)) $((timeout%60)))"
+      # firejail timeout is hh:mm:ss — format all three fields so timeouts
+      # of an hour or more aren't silently truncated.
+      local hz; hz="$(printf '%02d:%02d:%02d' $((timeout/3600)) $(((timeout%3600)/60)) $((timeout%60)))"
       firejail --quiet --net=none --private-tmp \
                ${root:+--read-only="$root"} --whitelist="$work" \
                --timeout="$hz" \

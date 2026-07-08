@@ -96,6 +96,18 @@ bash .claude/skills/bughunt-vuln-scan/setup-tools.sh --check # just report statu
 The script is idempotent and skips anything already on PATH. If you cannot
 install a tool, run with `--no-semgrep` to skip all deterministic pre-scans.
 
+### Scanner timeouts (applies to every Step 0–0e invocation)
+
+The Bash tool's default 120 s timeout is too short for several of these
+scanners: grype downloads/refreshes its vulnerability DB on first run and
+scanning base images pulls remote metadata; osv-scanner fetches advisories;
+semgrep and checkov can be slow on large trees. Run **every** scanner
+invocation in Steps 0–0e with an explicit `timeout: 600000` (10 minutes, the
+Bash tool maximum) on the Bash call. If a scanner still hits the 10-minute
+ceiling, retry it once with `run_in_background: true` and pick up its JSON
+output when it exits; if it cannot complete at all, skip that scanner (note
+it, set the matching `<tool>_used=false`) rather than failing the whole scan.
+
 ## Step 0 — Deterministic pre-scan (semgrep)
 
 Run **before** scoping so the rule-based hits are available to seed everything
@@ -210,6 +222,10 @@ not installed.
      ```
    If pulling base-image metadata is blocked (offline), note it and keep the
    filesystem scan only.
+   Grype is the slowest scanner in this pipeline — the first run downloads its
+   full vulnerability DB and each base-image scan pulls remote metadata — so
+   the `timeout: 600000` from the scanner-timeouts policy above is mandatory
+   here, per invocation (the DB download alone can exceed the 120 s default).
 3. **Parse** each grype JSON: for every `matches[]`, extract
    `vulnerability.id`, `vulnerability.severity`, `artifact.name`,
    `artifact.version`, and `vulnerability.fix.versions`. Normalize into seed

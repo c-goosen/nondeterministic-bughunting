@@ -15,6 +15,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RULES_DIR="$SCRIPT_DIR/semgrep"
 
+# Hard wall-clock cap on the semgrep run. Semgrep can be slow on large trees,
+# so this is generous (10 min, matching the scanner-timeout policy in
+# SKILL.md) rather than the Bash tool's 120 s default. Override with
+# SEMGREP_TIMEOUT (seconds); set to 0 to disable the cap entirely.
+SEMGREP_TIMEOUT="${SEMGREP_TIMEOUT:-600}"
+
 usage() {
   echo "Usage: run-semgrep.sh <target-dir-or-name> [--output <path>]" >&2
   exit 1
@@ -74,8 +80,15 @@ mkdir -p "$(dirname "$OUTPUT")"
 
 # Directory scan only — no registry auto-config.
 # Older semgrep builds may ignore --output; capture JSON from stdout.
+# Wrap in `timeout` (when available and enabled) so a runaway scan is killed
+# with SIGKILL 5 s after the soft deadline instead of hanging forever.
+TIMEOUT_PREFIX=()
+if [[ "$SEMGREP_TIMEOUT" != "0" ]] && command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_PREFIX=(timeout -k 5 "$SEMGREP_TIMEOUT")
+fi
+
 set +e
-semgrep scan \
+"${TIMEOUT_PREFIX[@]}" semgrep scan \
   --config "$RULES_DIR" \
   --metrics off \
   --json --quiet \
@@ -91,6 +104,11 @@ semgrep scan \
 rc=$?
 set -e
 
+# 124 = timeout killed the scan (soft deadline); 137 = SIGKILL after -k grace.
+if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+  echo "run-semgrep: semgrep timed out after ${SEMGREP_TIMEOUT}s (raise SEMGREP_TIMEOUT or narrow the target)" >&2
+  exit "$rc"
+fi
 # 0 = clean, 1 = findings (expected), 2 = config/parse error (fail).
 if [[ $rc -eq 2 ]]; then
   echo "run-semgrep: semgrep failed (exit $rc)" >&2
