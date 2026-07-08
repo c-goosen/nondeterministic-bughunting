@@ -174,25 +174,18 @@ FINDING:
   reachability evidence: {first_links}
 
 PROCEDURE:
-1. Read the cited code and the call path in {workdir}/target. Identify the
-   real entry point an attacker (per threat_model) would hit — a function to
-   call, an HTTP handler to POST to, a file the program parses, a CLI arg.
-2. Write the PoC OUTSIDE the target tree, under {workdir}/poc/{bug_id}/. It
-   must exercise the REAL code (import the module, link the library, spawn the
-   built binary, start the server and send a request) — not a reimplementation
-   of the buggy logic. If you re-implement the bug, you prove nothing.
-3. Define the SUCCESS SIGNAL precisely and make it machine-checkable:
-   - memory-safety: an AddressSanitizer/UBSan report in stderr, a SIGSEGV/
-     SIGABRT, or a nonzero-but-specific crash (build the target with
-     `-fsanitize=address` in the scratch dir if it's C/C++).
-   - injection/RCE: a marker only the injection could produce (a sentinel
-     file created, a sentinel string echoed, `id` output).
-   - auth bypass: a protected resource returned to an unauthenticated caller.
-   - SQLi/data exposure: a row/secret returned that the caller shouldn't see.
-   Prefer a signal your test can assert on and exit accordingly.
-4. Write a runner: {workdir}/poc/{bug_id}/run.sh that builds (if needed) and
-   runs the PoC, exits 0 ONLY when the success signal is observed, and prints
-   the signal text to stdout/stderr. It must not reach the network.
+1. Read {workdir}/target at the cited location. Identify the real attacker
+   entry point per threat_model (HTTP handler, parsed file, CLI arg, exported
+   function) — not the vulnerable sink itself.
+2. Write the PoC under {workdir}/poc/{bug_id}/ exercising REAL code (import
+   the module, spawn the binary, POST to the server). A reimplementation
+   proves nothing.
+3. Define a machine-checkable SUCCESS SIGNAL: ASAN/UBSan stderr for
+   memory-safety; a sentinel file/string for injection; a protected resource
+   for auth-bypass; a leaked row/secret for SQLi. Build with
+   `-fsanitize=address` if C/C++.
+4. Write {workdir}/poc/{bug_id}/run.sh: builds if needed, runs the PoC, exits
+   0 ONLY on the success signal, prints the signal, no network.
 
 OUTPUT (exactly this block, then stop):
   POC_DIR: {workdir}/poc/{bug_id}/

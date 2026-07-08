@@ -453,66 +453,12 @@ the other verifiers' reasoning (shared context propagates blind spots).
 The judge may see all N verdict blocks but must still re-read the cited
 source and issue its own binding decision.
 
-### 3a. Verifier prompt (assemble once, reuse for every spawn)
+### 3a. Exclusion rules (canonical source for verifiers and judge)
 
-```
-You are a skeptical security engineer adversarially verifying ONE finding
-from an automated scanner. Your default assumption is that the scanner is
-WRONG. Your job is to re-derive the claim from the source code yourself and
-decide TRUE_POSITIVE or FALSE_POSITIVE.
+The compact verifier form in §3b is used for all Phase 3b spawns; this
+section is the canonical rule list the compact form abbreviates and the
+Phase 3d judge references as "same 1-17."
 
-You are a DISPROVE-ONLY validator: you may confirm or reject the claim in
-front of you, but you may NOT introduce new findings, broaden this finding
-to a different sink/variable/path, or "fix up" a weak claim into a stronger
-one. A finding you'd have written differently is still the finding under
-review — judge it as stated. New bugs you notice belong in a separate scan,
-not in this verdict.
-
-You have read-only access to the target codebase at: {REPO_PATH}
-You may use Read, Glob, and Grep, but ONLY on paths inside {REPO_PATH}.
-Do NOT read, grep, or glob outside that root: anything outside it (the
-triage pipeline itself, scanner outputs, fixtures, other repos on disk) is
-out of scope and citing it contaminates your verdict. If a finding's
-`file` resolves outside {REPO_PATH}, return CANNOT_VERIFY with
-REFUTE_REASON: doesnt_exist. You may NOT build, run, or test the target,
-install dependencies, or reach the network. Every conclusion must come
-from reading source under {REPO_PATH}.
-
-ENVIRONMENT (from the operator; this defines the trust boundary):
-{context.environment or "Unknown. Treat any externally-reachable entry point as untrusted."}
-
-────────────────────────────────────────────────────────────────────────
-PROCEDURE: follow all four steps. Each exists because skipping it lets a
-specific false-positive class through.
-
-1. READ THE CODE AT THE CITED LOCATION YOURSELF.
-   Open {file} at line {line}. Understand what the code actually does. Do
-   NOT trust the scanner's description: scanners misread code surprisingly
-   often, and if you start from the summary you inherit the misreading.
-
-2. TRACE REACHABILITY BACKWARDS FROM THE SINK.
-   Grep for callers of this function/method. Follow imports. Establish
-   whether attacker-controlled input (per the ENVIRONMENT above) can
-   actually reach this line. A plausible-sounding chain is NOT enough: for
-   at least the FIRST link in the chain, READ the actual call site and
-   QUOTE the file:line in your rationale. Unreachable code is the single
-   largest false-positive source.
-
-3. HUNT FOR PROTECTIONS.
-   Actively look for reasons the finding is WRONG:
-   - Input validation / sanitization upstream of the sink
-   - Framework auto-escaping, parameterized queries, prepared statements
-   - Type constraints (the value is an int, an enum, a fixed-length token)
-   - Authentication / authorization gates before this path
-   - Configuration that limits exposure (feature flag off, debug-only)
-   - Dead code, test-only code, example/fixture code
-
-4. STRESS-TEST EACH PROTECTION.
-   For each protection you found: is it applied on EVERY path to the sink,
-   or only the one the scanner happened to trace? Are there encodings,
-   edge cases, or alternate entry points that bypass it?
-
-────────────────────────────────────────────────────────────────────────
 EXCLUSION RULES: if the finding matches any of these, it is FALSE_POSITIVE
 even if technically accurate. Cite the rule number in your verdict.
 
@@ -562,33 +508,6 @@ even if technically accurate. Cite the rule number in your verdict.
 
 {if context.extra_fp_rules: append here verbatim under an
  "ORG-SPECIFIC RULES:" heading}
-
-────────────────────────────────────────────────────────────────────────
-VERDICT: your response MUST end with EXACTLY this block:
-
-  VERDICT: TRUE_POSITIVE | FALSE_POSITIVE | CANNOT_VERIFY
-  CONFIDENCE: <0-10>
-  REFUTE_REASON: <one of: doesnt_exist, already_handled,
-    implausible_trigger, intentional_behavior, misread_code, duplicate,
-    not_actionable, n/a>
-  EXCLUSION_RULE: <1-17, org rule, or none>
-  FIRST_LINK: <file:line of the first call site you read, or "none found">
-  RATIONALE: <2-5 sentences citing specific file:line evidence for
-    reachability, protections found/absent, and why each held or didn't>
-
-TRUE_POSITIVE requires ALL of: path is reachable from untrusted input per
-the ENVIRONMENT; protections are insufficient or bypassable; real-world
-exploitation is feasible.
-
-FALSE_POSITIVE requires ANY of: unreachable from untrusted input;
-adequately protected on all paths; scanner misread the code; an exclusion
-rule applies.
-
-CANNOT_VERIFY: static reasoning genuinely hit its limit (e.g. behavior
-depends on runtime configuration you cannot read, or the code path crosses
-into a binary you cannot inspect). Use sparingly; it must not become the
-default.
-```
 
 ### 3b. Spawn N verifiers per candidate, all in one message
 
@@ -696,18 +615,9 @@ Findings with a `file` but no `line` get **one** verifier vote regardless
 of `--votes` (a file-level sweep is expensive and doesn't benefit from
 voting).
 
-**If any Task call returns `status: "async_launched"` instead of the
-verifier's text**, the runtime backgrounded it (some runtimes do this
-automatically for large parallel batches). Pick one recovery and use it for
-the whole batch:
-  - If completion notifications arrive in your conversation: parse each
-    verifier's VERDICT block from its notification `result` as it lands.
-    Do not end your turn until every vote is accounted for.
-  - If notifications do not arrive: do not poll transcript files. Re-spawn
-    the missing verifiers in a fresh Task batch (smaller shard size, e.g.
-    10) and use the synchronous results.
-The same recovery applies to the dedupe subagent in 2b and the ranking
-subagents in 4a.
+**If any Task call returns `status: "async_launched"`**, follow the recovery
+procedure in `.claude/skills/_lib/async-recovery.md`. The same recovery
+applies to the dedupe subagent in 2b and the ranking subagents in 4a.
 
 ### 3c. Tally votes
 
@@ -1158,71 +1068,4 @@ Triage complete: {N} findings -> {T} confirmed, {F} false positives, {D} duplica
 Wrote ./TRIAGE.md and ./TRIAGE.json
 ```
 
----
-
-## Testing this skill
-
-Smoke test (five-finding fixture: 2 real, 1 dup, 2 FP):
-
-```
-/bughunt-triage .claude/skills/bughunt-triage/fixtures/canary-findings.json --auto --repo targets/canary
-```
-
-Expected: f001 and f003 confirmed; f002 duplicate of f001; f004 dropped
-(`misread_code`: it's a read buffer, not a randomness source); f005 dropped
-(`already_handled`: there is a null check at line 68).
-
-Or against pipeline output:
-
-```
-vuln-pipeline run drlibs --runs 3 --parallel --stream
-/bughunt-triage results/drlibs/<ts>/ --repo targets/drlibs
-```
-
-Hand-check a sample of TRUE_POSITIVE/HIGH results (the `first_links` should
-point at real call sites) and a sample of FALSE_POSITIVE rejects (the
-`exclusion_rule` or `refute_reasons` should be defensible).
-
----
-
-## Design notes
-
-- **Checkpoints are per-phase JSON**, not conversation state. The pipeline's
-  `--resume <session_id>` (docs/pipeline.md) restores transcript history but
-  doesn't help when the orchestrator's context window itself fills;
-  file-backed checkpoints let a brand-new session pick up from the last
-  completed phase. `./.triage-state/` is scratch — add to `.gitignore`.
-- **Multi-model verify + judge:** each vote runs on a different model from
-  `verifier_models` (Phase 0e) to reduce single-model blind spots; split /
-  tie / majority-CANNOT_VERIFY outcomes go to `judge_model` — the largest /
-  most capable model available (`claude-opus-4-8-thinking-high` preferred).
-  Unanimous or clear-majority findings skip the judge to save cost.
-- **Dedupe runs before verify** to cut verifier spend by the duplication
-  factor (often 2-4x on multi-scanner input) at the cost of one cheap
-  subagent.
-- **Semantic dedupe is one agent**, given only id/file/line/category/title:
-  enough to cluster, not enough to leak one scanner's reasoning into
-  another finding's verification.
-- **Bash is allowed narrowly** for `git log` (owner hints), `jq`/`find`
-  (ingest), and `python3 .claude/skills/_lib/checkpoint.py` (state I/O).
-  The actual safety property is "no execution of target code," which is
-  preserved.
-- **`CANNOT_VERIFY`** exists so verifiers aren't forced into a false
-  binary. It maps to `needs_manual_test` under recall policy and to a drop
-  under precision policy.
-- **Threat-model boost is capped at one step** so a stated threat can't
-  re-inflate a LOW back to HIGH and defeat the precondition rule.
-- **`severity_label` is separate from `severity`.** Sorting always uses the
-  precondition-derived HIGH/MEDIUM/LOW; the label is presentation-layer for
-  whatever standard the reviewer's tooling expects.
-- **Pipeline `report.json` ingest is best-effort.** Those reports describe
-  ASAN crashes with prose exploitability analysis rather than the
-  file/line/category shape static verifiers expect. Expect more
-  `needs_manual_test` verdicts on that input than on static-scanner JSON.
-- **Sharding at ~40 parallel Tasks** is a conservative ceiling for typical
-  agent-spawn limits; tune up if your runtime allows.
-- **No network**, deliberately, with the one narrow exception in Phase 0d
-  (a cached Security Context read, gated to public GitHub repos, never
-  feeding Phase 3 verification). General CVE-database enrichment and
-  upstream-fix checks would help ranking further but would break the
-  air-gapped-review property, so they stay out.
+See `DESIGN.md` in this skill directory for design rationale and smoke tests.
