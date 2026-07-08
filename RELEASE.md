@@ -17,6 +17,36 @@
   Adopts the safe subset of the _Needle in the Haystack_ techniques; the
   aggressive "false anchoring" variant was deliberately softened to fit the
   skill's blue-team framing.
+- `bughunt-audit-report`: Phase 2 of the HTML report now includes a **SAST
+  Evidence section** — a tool-status grid (which scanners ran, raw-hit counts vs.
+  promoted-finding counts) and per-tool collapsible finding tables, sourced
+  deterministically from `VULN-FINDINGS.json`. A "SAST Evidence" nav anchor is
+  added. The report generator reads `summary.raw_hits` and `summary.tools` from
+  `VULN-FINDINGS.json`; raw tool output files (`.semgrep.json`, `.osv.json`, etc.)
+  in the output directory are used as a fallback source for raw hit counts.
+- `bughunt-vuln-scan`: `VULN-FINDINGS.json` summary extended with a `raw_hits`
+  object recording pre-dedup tool output counts per scanner, and `govulncheck`
+  added to `summary.tools`. Both fields feed the new HTML report SAST Evidence
+  section. README updated to list govulncheck as the sixth pre-scan tool.
+- **Token-efficiency pass** across all `bughunt-*` skills — reduces orchestrator
+  context load and per-subagent prompt sizes without changing observable behaviour:
+  - `bughunt-triage`: compact verifier prompt is now the **default** for all Phase 3b
+    spawns (full prose reserved for the Phase 3d judge only — saves ~1 000 tokens ×
+    findings × votes per run); §3a stripped to the exclusion-rules block only (~80
+    lines removed, compact prompt already embeds the condensed list); phase 1–5
+    checkpoints no longer repeat the `context` dict (already in `phase0.json`);
+    Phase 4 ranking prompt omits null threat-model/security-context stanzas; `##
+    Testing` and `## Design notes` extracted to `DESIGN.md`.
+  - `bughunt-vuln-scan`: per-subagent review brief WHAT-TO-LOOK-FOR / DO-NOT-REPORT
+    compressed from 37 lines to 3; disprove brief compressed from ~300 words to
+    ~100; empty Security Context seed block now suppressed instead of sent as
+    "none"; `## Provenance` extracted to `PROVENANCE.md`.
+  - `bughunt-patch`: `TRIAGE.json` input fast-paths past the field-alias step (already
+    canonical); `## Testing` and `## Design notes` extracted to `DESIGN.md`.
+  - `bughunt-verify`: PoC-author PROCEDURE brief halved (~20 lines → 10), same four
+    constraints preserved.
+  - `_lib/async-recovery.md` (new): shared `async_launched` recovery procedure,
+    referenced from triage and patch instead of duplicated inline.
 
 ## v0.1.0 — 2026-07-02
 
