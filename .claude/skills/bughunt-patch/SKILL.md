@@ -139,7 +139,8 @@ flat `findings[]` of dicts. Pull what's present; never guess what's absent.
 
 1. **`TRIAGE.json`** — read `.findings[]`. **Filter to `verdict ==
    "true_positive"`.** This is the canonical input: already verified,
-   deduped, ranked, owner-tagged.
+   deduped, ranked, owner-tagged. **Fast-path: skip step 1b entirely** —
+   TRIAGE.json uses canonical field names; no alias mapping needed.
 2. **`VULN-FINDINGS.json`** — read `.findings[]`. Unverified; print
    `Warning: VULN-FINDINGS.json is unverified scanner output. Consider
    /bughunt-triage first.` and continue.
@@ -151,6 +152,8 @@ flat `findings[]` of dicts. Pull what's present; never guess what's absent.
    `issues`/`vulnerabilities` array.
 
 ### 1b. Field aliases (canonical ← also-accept)
+
+Skip this step when the input was `TRIAGE.json` (fast-path from 1a).
 
 | Canonical        | Also accept                                              |
 |------------------|----------------------------------------------------------|

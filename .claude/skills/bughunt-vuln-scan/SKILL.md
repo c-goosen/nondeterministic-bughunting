@@ -411,9 +411,11 @@ SEMGREP SEEDS (deterministic leads for this focus area, may be empty):
  or "none"}
 
 SECURITY CONTEXT LEADS (this repo's own recurring-weak-spot history from
-securitycontext.dev, may be empty — advisory, not verified):
-{the SC-NNN seed records from Step 0f whose path falls in this focus area,
- or "none"}
+securitycontext.dev — advisory, not verified):
+{the SC-NNN seed records from Step 0f whose path falls in this focus area}
+
+Omit the SECURITY CONTEXT LEADS block entirely when no SC-NNN seeds apply to
+this focus area — do not send the header with "none".
 
 TASK: read the source in your focus area and identify candidate
 vulnerabilities. This is static review — do NOT build, run, or probe
@@ -462,43 +464,9 @@ write to the DB", "an operator who can edit the config can change behavior",
 caller is already the trust boundary). If you cannot name a concrete
 attacker who gains something across a real boundary, it is not a finding.
 
-WHAT TO LOOK FOR (reference — consult, don't transcribe):
-
-  MEMORY SAFETY (C/C++ and unsafe/FFI blocks) — HIGH VALUE:
-  - heap-buffer-overflow / stack-buffer-overflow / global-buffer-overflow
-  - heap-use-after-free / double-free
-  - integer overflow feeding an allocation or index
-  - format-string bugs
-  - unbounded recursion or allocation driven by untrusted size fields
-
-  INJECTION & CODE EXECUTION — HIGH VALUE:
-  - SQL / command / LDAP / XPath / NoSQL / template injection
-  - path traversal in file operations
-  - unsafe deserialization (pickle, YAML, native), eval injection
-  - XSS (reflected, stored, DOM-based) — but see React/Angular note below
-
-  AUTH, CRYPTO, DATA — HIGH VALUE:
-  - authentication or authorization bypass, privilege escalation
-  - TOCTOU on a security check
-  - hardcoded secrets, weak crypto, broken cert validation
-  - sensitive data (secrets, PII) in logs or error responses
-
-  LOW VALUE — note briefly, keep looking:
-  - null-pointer deref at small fixed offsets with no attacker control
-  - assertion failures / clean error returns (correct handling, not a bug)
-
-DO NOT REPORT (common false positives — skip even if technically present):
-  - volumetric DoS / rate-limiting / resource-exhaustion — BUT unbounded
-    recursion, algorithmic-complexity blowup, or ReDoS driven by untrusted
-    input ARE reportable
-  - memory-safety findings in memory-safe languages outside unsafe/FFI
-  - XSS in React/Angular/Vue unless via dangerouslySetInnerHTML,
-    bypassSecurityTrustHtml, v-html, or equivalent raw-HTML escape hatch
-  - findings in test files, fixtures, build scripts, docs, or .ipynb
-  - missing hardening / best-practice gaps with no concrete exploit
-  - env vars and CLI flags as the attack vector (operator-controlled)
-  - regex injection, log spoofing, open redirect, missing audit logs
-  - outdated third-party dependency versions
+HIGH VALUE: memory-safety (overflow/UAF/fmt-string/unbounded-recursion in C or unsafe/FFI blocks); injection (SQL/cmd/LDAP/NoSQL/template, path-traversal, unsafe-deserial/eval, XSS); auth/crypto/data (bypass, privilege-escalation, TOCTOU, hardcoded-secrets, weak-crypto, PII-in-logs).
+LOW VALUE (note, keep looking): null-deref at fixed offsets; assertion failures; clean error returns.
+DO NOT REPORT: volumetric DoS/rate-limiting (ReDoS and unbounded-recursion ARE valid); memory-safety in safe langs outside unsafe/FFI; XSS in React/Angular/Vue except dangerouslySetInnerHTML/bypassSecurityTrustHtml/v-html; test/fixture/build/doc/.ipynb files; missing hardening with no concrete exploit; operator env-vars/CLI flags; regex-inject/log-spoof/open-redirect/missing-audit-log; outdated dep versions.
 
 {if --extra <file> was given: append its contents here verbatim}
 
@@ -599,41 +567,24 @@ disprover that sees the hunt rationale rubber-stamps it.
 ### Disprove brief (per finding)
 
 ```
-You are a skeptical reviewer trying to DISPROVE one candidate security
-finding from an automated hunt. Your default assumption is that it is WRONG.
-You CANNOT log findings of your own and you CANNOT broaden the claim — your
-only outputs are (a) the strongest reason this finding is false or vacuous,
-and (b) a confidence score for whether it survives rigorous triage.
+DISPROVE this finding. Default: it is WRONG. No new findings; no broadening the claim.
+Read-only access to {target_dir} (Read/Grep only; do NOT execute).
 
-FINDING:
-{the full <finding> block}
+FINDING: {the full <finding> block}
 
-TARGET: {target_dir} (you may Read/Grep inside it; do NOT execute)
+1. Read {file}:{line} — does the code actually do what the description claims?
+2. Is the attacker → boundary concrete, or does the "attacker" already hold the
+   capability (vacuous threat model)?
+3. Find the single strongest disproof: upstream check, type/length constraint,
+   framework auto-escaping, auth gate, dead/test code, or FP pattern (volumetric-DoS,
+   memory-safe-lang, operator-input, hardening-gap, outdated-dep).
+4. Score 1-10 that this is a real vulnerability despite your best disproof attempt:
+   1-3 disproof landed; 4-5 uncertain; 6-7 credible; 8-10 clear pattern.
 
-STEP 1 — Re-read the cited code. Open {file} around line {line}. Does the
-code actually do what the description claims, or did the hunt misread it?
-
-STEP 2 — Attack the threat model. Is the stated attacker → boundary real, or
-does the "attacker" already hold the capability (vacuous — triage rule 17)?
-Name the boundary that is or isn't crossed.
-
-STEP 3 — Hunt for the disproof: an upstream check, a type/length constraint,
-framework auto-escaping, an auth gate, unreachable/dead/test code, or a
-common false-positive pattern (volumetric DoS, memory-safe language,
-env-var/operator vector, missing-hardening-only, regex/log injection,
-outdated dep). State the single strongest one you found, or "none found".
-
-STEP 4 — Score 1-10 that this is a real, actionable vulnerability despite
-your best attempt to disprove it:
-  1-3  disproof succeeded — likely false positive or vacuous
-  4-5  disproof plausible but not conclusive
-  6-7  survived; credible, needs investigation
-  8-10 survived a real disproof attempt; clear pattern
-
-OUTPUT (exactly this, nothing else):
+Output ONLY:
   CONFIDENCE: <1-10>
-  DISPROOF: <the strongest counter-argument, or "none found">
-  REASON: <one line: why the score>
+  DISPROOF: <strongest counter-argument, or "none found">
+  REASON: <one line>
 ```
 
 **Resolve:** overwrite each finding's `confidence` with the score
@@ -676,14 +627,25 @@ Write **both** files to `<target-dir>/`:
   ],
   "summary": {
     "total": 0, "high": 0, "medium": 0, "low": 0, "low_confidence": 0,
-    "tools": {"semgrep": false, "osv": false, "grype": false, "gitleaks": false, "checkov": false, "security_context": false},
-    "by_source": {"agent": 0, "agent-gapfill": 0, "semgrep": 0, "osv": 0, "grype": 0, "gitleaks": 0, "checkov": 0}
+    "tools": {"semgrep": false, "osv": false, "grype": false, "gitleaks": false, "checkov": false, "govulncheck": false, "security_context": false},
+    "by_source": {"agent": 0, "agent-gapfill": 0, "semgrep": 0, "osv": 0, "grype": 0, "gitleaks": 0, "checkov": 0, "govulncheck": 0},
+    "raw_hits": {"semgrep": 0, "osv": 0, "grype": 0, "gitleaks": 0, "checkov": 0, "govulncheck": 0}
   }
 }
 ```
 
 Findings are sorted by `confidence` desc (then severity, file, line), so
 the top of the file is the highest-signal material.
+
+`raw_hits` records the **total count of raw tool output entries before any
+deduplication or promotion filter** — `results[]` length from `.semgrep.json`,
+total vulnerabilities from `.osv.json`, `matches[]` from `.grype.json`, entry
+count from `.gitleaks.json`, `failed_checks[]` from `.checkov.json`, and
+`finding` objects from `.govulncheck.json`. Set a key to 0 when the tool ran
+but produced no output; omit the key entirely when the tool did not run
+(`tools.<key>: false`). The `bughunt-audit-report` HTML generator reads this
+field to display raw-hit vs. promoted-finding counts in the SAST Evidence
+section without needing the raw files themselves.
 
 **`VULN-FINDINGS.md`** — human-readable: a summary table (id | severity |
 category | file:line | title), then one `### F-NNN` section per finding with

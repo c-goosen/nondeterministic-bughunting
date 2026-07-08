@@ -102,7 +102,9 @@ State files in `./.triage-state/`:
   Resume decisions read ONLY this file, never a glob of `phase*.json` or
   shard files (stale files from a prior run must not be trusted).
 - `phaseN.json` — data payload for phase N (schemas at the tail of each phase
-  section below).
+  section below). `phase0.json` is the sole writer of `context`; phases 1–5
+  checkpoints omit it — checkpoint.py's merge reconstructs full working state
+  from `phase0.json` + `phaseN.json` in sequence.
 - `_chunk.tmp` — transient payload buffer; overwritten before every
   `save`/`shard`/`append` call.
 
@@ -358,7 +360,7 @@ longest common suffix you can see.
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 1, "context": {...}, "findings": [ {normalized finding dicts with id/source/file/line/category/...} ], "path_resolution": "<which of a/b/c worked>"}
+{"phase": 1, "findings": [ {normalized finding dicts with id/source/file/line/category/...} ], "path_resolution": "<which of a/b/c worked>"}
 ```
 
 Then Bash:
@@ -431,7 +433,7 @@ Carry forward `candidates[]` = the surviving canonicals.
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 2, "context": {...}, "findings": [ {all findings; duplicates carry verdict/duplicate_of} ], "candidates": ["f001", "f003", "..."]}
+{"phase": 2, "findings": [ {all findings; duplicates carry verdict/duplicate_of} ], "candidates": ["f001", "f003", "..."]}
 ```
 
 Then Bash:
@@ -647,9 +649,10 @@ concurrently. Do not set `run_in_background`; you need the final text, not
 an async handle. If `len(candidates) * N` exceeds ~40, shard into
 sequential batches of ~40, but keep each batch a single message.
 
-**Prompt size at scale.** The 3a prompt is ~1200 words. When
-`candidates * votes > ~50`, use this compact form instead (same procedure
-and output contract, prose stripped):
+**Prompt size.** Use the compact form below by default for **all** Phase 3b
+verifier spawns — same procedure, same exclusion rules, same output contract,
+~80% fewer tokens. Reserve the full 3a prompt for the Phase 3d judge only:
+split-vote cases benefit from the extra procedure prose; routine verifiers do not.
 
 ```
 Adversarially verify ONE scanner finding. Default: scanner is WRONG.
@@ -820,7 +823,7 @@ Build `confirmed[]` = candidates with final `verdict == true_positive`.
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 3, "context": {...}, "findings": [ {all findings with verdict/vote_breakdown/vote_models/confidence/refute_reasons/first_links/rationale/exclusion_rule/judge_invoked/judge_model} ], "confirmed": ["f001", "..."]}
+{"phase": 3, "findings": [ {all findings with verdict/vote_breakdown/vote_models/confidence/refute_reasons/first_links/rationale/exclusion_rule/judge_invoked/judge_model} ], "confirmed": ["f001", "..."]}
 ```
 
 Then Bash:
@@ -852,6 +855,11 @@ severity are independent judgments; "this is real" must not inflate into
 
 ### 4a. Ranking prompt
 
+When `context.threat_model` is empty and `context.security_context` is null,
+omit the THREAT MODEL and HISTORICAL CONTEXT stanzas from the prompt —
+STEP 3 of the ranking procedure becomes unreachable and the stanza labels
+still burn tokens.
+
 Spawn one Task per confirmed finding (`subagent_type: "general-purpose"`,
 all in one message) with:
 
@@ -864,11 +872,14 @@ You may Read/Grep the codebase at {REPO_PATH} to check preconditions. Do
 NOT execute code.
 
 ENVIRONMENT: {context.environment}
-THREAT MODEL (operator-stated, may be empty):
-{context.threat_model as bullets, or "(none provided)"}
-HISTORICAL CONTEXT (this repo's own fix/CVE history via securitycontext.dev,
-may be empty): {context.security_context.recurring_weak_spots as bullets, or
-"(none provided)"}
+{if context.threat_model non-empty:}
+THREAT MODEL (operator-stated):
+{context.threat_model as bullets}
+{/if}
+{if context.security_context non-null:}
+HISTORICAL CONTEXT (this repo's own fix/CVE history via securitycontext.dev):
+{context.security_context.recurring_weak_spots as bullets}
+{/if}
 SCORING STANDARD: {context.scoring}
 
 FINDING:
@@ -956,7 +967,7 @@ unlocatable): set `severity: null`, `verify_verdict: null`,
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 4, "context": {...}, "findings": [ {all findings with severity/severity_label/preconditions/access_level/threat_match/severity_alignment/verify_verdict} ]}
+{"phase": 4, "findings": [ {all findings with severity/severity_label/preconditions/access_level/threat_match/severity_alignment/verify_verdict} ]}
 ```
 
 Then Bash:
@@ -988,7 +999,7 @@ set `owner_hint: null`.
 **Checkpoint:** Write tool → `./.triage-state/_chunk.tmp`:
 
 ```json
-{"phase": 5, "context": {...}, "findings": [ {all findings with owner_hint} ]}
+{"phase": 5, "findings": [ {all findings with owner_hint} ]}
 ```
 
 Then Bash:

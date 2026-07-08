@@ -28,6 +28,17 @@ import sys
 from datetime import date
 from pathlib import Path
 
+SAST_TOOL_DEFS = [
+    # (source_key, display_name, description, raw_filename)
+    ("semgrep",          "Semgrep",          "SAST — pattern matching on source ASTs",         ".semgrep.json"),
+    ("osv",              "osv-scanner",      "Known-vulnerable dependencies via OSV.dev",       ".osv.json"),
+    ("grype",            "Grype",            "Container image & filesystem CVEs",               ".grype.json"),
+    ("gitleaks",         "Gitleaks",         "Hardcoded secrets — working tree + git history",  ".gitleaks.json"),
+    ("checkov",          "Checkov",          "IaC misconfig — Terraform, K8s, Docker, etc.",   ".checkov.json"),
+    ("govulncheck",      "govulncheck",      "Go callgraph-reachable dependency CVEs",          ".govulncheck.json"),
+    ("security_context", "Security Context", "Historical vuln leads from public GitHub history", None),
+]
+
 SEV_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFORMATIONAL": 4, "INFO": 4}
 SEV_CLASS = {
     "CRITICAL": "sev-critical", "HIGH": "sev-high", "MEDIUM": "sev-medium",
@@ -49,6 +60,163 @@ NARRATIVE_KEYS = (
     "triage_method_note", "exec_summary", "highest_impact", "does_well",
     "run_model", "run_tokens",
 )
+
+
+def _sast_raw_count(outdir, raw_file):
+    """Count raw hits from a SAST tool output file in outdir. Returns int or None."""
+    if raw_file is None:
+        return None
+    p = Path(outdir) / raw_file
+    if not p.exists():
+        return None
+    if raw_file == ".govulncheck.json":
+        count = 0
+        try:
+            for line in p.read_text().splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        obj = json.loads(line)
+                        if obj.get("finding"):
+                            count += 1
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+        except OSError:
+            pass
+        return count
+    try:
+        data = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    if raw_file == ".semgrep.json":
+        return len(data.get("results", []))
+    if raw_file == ".osv.json":
+        total = 0
+        for res in data.get("results", []):
+            for pkg in res.get("packages", []):
+                total += len(pkg.get("vulnerabilities", []))
+        return total
+    if raw_file == ".grype.json":
+        return len(data.get("matches", []))
+    if raw_file == ".gitleaks.json":
+        return len(data) if isinstance(data, list) else 0
+    if raw_file == ".checkov.json":
+        failed = []
+        candidate = data.get("results") or data
+        if isinstance(candidate, dict):
+            failed = candidate.get("failed_checks", [])
+        elif isinstance(candidate, list):
+            for item in candidate:
+                if isinstance(item, dict):
+                    inner = item.get("results", {})
+                    if isinstance(inner, dict):
+                        failed.extend(inner.get("failed_checks", []))
+        return len(failed)
+    return None
+
+
+def _sast_findings_table(src_findings):
+    """Render a compact table of SAST-promoted findings (from VULN-FINDINGS.json)."""
+    if not src_findings:
+        return '<p style="color:var(--text-muted);font-size:.82rem;padding:.4rem 0">No findings promoted from this tool.</p>'
+    rows = []
+    for f in src_findings:
+        loc = f"{f.get('file', '')}:{f.get('line', '')}" if f.get("file") else ""
+        rows.append(
+            f"<tr><td><strong>{esc(f.get('id', ''))}</strong></td>"
+            f"<td>{sev_badge(f.get('severity'))}</td>"
+            f"<td><code>{esc(loc)}</code></td>"
+            f"<td>{esc(f.get('title') or f.get('category', ''))}</td></tr>"
+        )
+    return (
+        '<div class="table-wrap" style="margin:.6rem 0 0"><table>'
+        "<thead><tr><th>ID</th><th>Severity</th><th>Location</th><th>Title / Advisory</th></tr></thead>"
+        "<tbody>" + "".join(rows) + "</tbody></table></div>"
+    )
+
+
+def sast_evidence_section(vuln_doc, outdir):
+    """Render the Deterministic Pre-Scan Evidence block for Phase 2."""
+    if not vuln_doc:
+        return ""
+    summary = vuln_doc.get("summary", {})
+    tools_used = summary.get("tools", {})
+    by_source = summary.get("by_source", {})
+    raw_hits_meta = summary.get("raw_hits", {})
+    findings = vuln_doc.get("findings", [])
+
+    sast_keys = {t[0] for t in SAST_TOOL_DEFS}
+    by_src = {}
+    for f in findings:
+        src = f.get("source", "")
+        if src in sast_keys:
+            by_src.setdefault(src, []).append(f)
+
+    tool_cards = []
+    for key, name, desc, raw_file in SAST_TOOL_DEFS:
+        used = tools_used.get(key, False) or bool(by_src.get(key))
+        promoted = by_source.get(key, len(by_src.get(key, [])))
+        raw_count = raw_hits_meta.get(key) if raw_hits_meta else None
+        if raw_count is None:
+            raw_count = _sast_raw_count(outdir, raw_file)
+
+        if used:
+            counts = []
+            if raw_count is not None:
+                counts.append(f'<span class="sast-count raw">{raw_count} raw hits</span>')
+            if promoted:
+                counts.append(f'<span class="sast-count promoted">{promoted} promoted</span>')
+            elif raw_count is not None:
+                counts.append('<span class="sast-count zero">0 promoted</span>')
+            tool_cards.append(
+                f'<div class="sast-card ran">'
+                f'<span class="sast-card-name">{esc(name)}</span>'
+                f'<span class="sast-card-desc">{esc(desc)}</span>'
+                f'<div class="sast-card-counts">{"".join(counts)}</div>'
+                f"</div>"
+            )
+        else:
+            tool_cards.append(
+                f'<div class="sast-card skipped">'
+                f'<span class="sast-card-name">{esc(name)}</span>'
+                f'<span class="sast-card-desc">{esc(desc)}</span>'
+                f'<div class="sast-card-counts"><span class="sast-count skipped">not used</span></div>'
+                f"</div>"
+            )
+
+    detail_blocks = []
+    for key, name, desc, raw_file in SAST_TOOL_DEFS:
+        src_findings = by_src.get(key, [])
+        used = tools_used.get(key, False) or bool(src_findings)
+        if not used:
+            continue
+        raw_count = raw_hits_meta.get(key) if raw_hits_meta else None
+        if raw_count is None:
+            raw_count = _sast_raw_count(outdir, raw_file)
+        count_str = f"{raw_count} raw hits" if raw_count is not None else f"{len(src_findings)} promoted"
+        detail_blocks.append(
+            f'<details class="sast-detail">'
+            f"<summary><strong>{esc(name)}</strong> &mdash; {esc(count_str)}</summary>"
+            + _sast_findings_table(src_findings)
+            + "</details>"
+        )
+
+    if not tool_cards:
+        return ""
+
+    return (
+        '  <div id="sast-evidence" style="margin:1.5rem 0 2rem">\n'
+        '    <h3 style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:.4rem;'
+        'padding-bottom:.5rem;border-bottom:1px solid var(--border)">Deterministic Pre-Scan Evidence</h3>\n'
+        '    <p style="color:var(--text-muted);font-size:.84rem;margin-bottom:1rem">'
+        "Raw output from the deterministic scanner layer (Steps 0&ndash;0g). "
+        "These hits seeded the subagent hunt; promoted findings appear in the candidate table below.</p>\n"
+        '    <div class="sast-grid">\n'
+        + "".join(f"      {c}\n" for c in tool_cards)
+        + "    </div>\n"
+        + "".join(f"    {b}\n" for b in detail_blocks)
+        + "  </div>\n"
+    )
 
 
 def fmt_tokens(v):
@@ -191,6 +359,24 @@ CSS = """
     footer{border-top:1px solid var(--border);padding:1.5rem 2rem;text-align:center;color:var(--text-muted);font-size:.8rem}
     footer a{color:var(--accent);text-decoration:none}
     footer a:hover{text-decoration:underline}
+    .sast-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.7rem;margin:0 0 1.1rem}
+    .sast-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:.9rem 1rem;display:flex;flex-direction:column;gap:.3rem}
+    .sast-card.ran{border-left:3px solid var(--low)}
+    .sast-card.skipped{opacity:.5}
+    .sast-card-name{font-weight:700;font-size:.85rem;color:var(--text)}
+    .sast-card-desc{font-size:.74rem;color:var(--text-muted);line-height:1.4}
+    .sast-card-counts{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.2rem}
+    .sast-count{font-size:.71rem;font-weight:600;padding:.13rem .4rem;border-radius:4px}
+    .sast-count.raw{background:rgba(88,166,255,.12);color:var(--accent);border:1px solid rgba(88,166,255,.25)}
+    .sast-count.promoted{background:rgba(63,185,80,.12);color:var(--low);border:1px solid rgba(63,185,80,.25)}
+    .sast-count.zero{background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border)}
+    .sast-count.skipped{background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border)}
+    details.sast-detail{margin-bottom:.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:.7rem 1rem}
+    details.sast-detail summary{cursor:pointer;font-size:.87rem;color:var(--text);display:flex;align-items:center;gap:.5rem;list-style:none;user-select:none}
+    details.sast-detail summary::-webkit-details-marker{display:none}
+    details.sast-detail summary::after{content:"▾";margin-left:auto;color:var(--text-muted);font-size:.78rem;transition:transform .15s}
+    details.sast-detail[open] summary::after{transform:rotate(-180deg)}
+    details.sast-detail .table-wrap{margin-top:.7rem}
     @media (max-width:600px){.pipeline-arrow{display:none}header{padding:1.5rem 1rem}main{padding:1.5rem 1rem 3rem}}
 """
 
@@ -291,6 +477,7 @@ def render(outdir):
   <li><a href="#overview">Overview</a></li>
   <li><a href="#phase-1">Phase 1 — Recon</a></li>
   <li><a href="#phase-2">Phase 2 — Hunt</a></li>
+  <li><a href="#sast-evidence">SAST Evidence</a></li>
   <li><a href="#phase-3">Phase 3 — Validate</a></li>
   <li><a href="#phase-4">Phase 4 — Report</a></li>
   <li><a href="#phase-5">Phase 5 — Patch</a></li>
@@ -338,7 +525,7 @@ def render(outdir):
     # ---- Phase 1 recon ----
     parts.append(phase_recon(narr))
     # ---- Phase 2 hunt ----
-    parts.append(phase_hunt(narr, findings))
+    parts.append(phase_hunt(narr, findings, vuln_doc, outdir))
     # ---- Phase 3 validate ----
     parts.append(phase_validate(narr, findings, summary, tp, fp))
     # ---- Phase 4 report ----
@@ -402,7 +589,7 @@ def phase_recon(narr):
 """
 
 
-def phase_hunt(narr, findings):
+def phase_hunt(narr, findings, vuln_doc=None, outdir=None):
     focus = narr.get("focus_areas") or sorted({f.get("category", "") for f in findings if f.get("category")})
     focus_html = "\n".join(f'          <span class="tag">{esc(s)}</span>' for s in focus)
     hunt_out = narr.get("hunt_output") or f"<p><strong style=\"color:var(--text)\">{len(findings)} candidate findings</strong> produced for validation.</p>"
@@ -415,6 +602,7 @@ def phase_hunt(narr, findings):
             f"<td>{esc(f.get('title',''))}</td></tr>"
         )
     rows_html = "\n".join(rows)
+    sast_html = sast_evidence_section(vuln_doc, outdir) if vuln_doc else ""
     return f"""  <section id="phase-2">
     <div class="phase-header">
       <div class="phase-num" style="background:var(--phase-2)">2</div>
@@ -428,7 +616,7 @@ def phase_hunt(narr, findings):
       </div></div>
       <div class="card"><h3>Output</h3>{hunt_out}</div>
     </div>
-    <div class="table-wrap"><table>
+{sast_html}    <div class="table-wrap"><table>
       <thead><tr><th>ID</th><th>Severity</th><th>Category</th><th>Title</th></tr></thead>
       <tbody>
 {rows_html}

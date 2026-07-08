@@ -49,6 +49,8 @@ the run's JSON artifacts — do not hand-edit generated HTML.
 | `PATCHES.json` | Phase 5 patch cards | optional |
 | `PAYLOADS.json` | Phase 6 payload cards | optional |
 | `narrative.json` | prose slots (below) | optional but strongly recommended |
+| `VULN-FINDINGS.json` | SAST evidence section — tool status, raw hits, promoted findings | optional |
+| `.semgrep.json` `.osv.json` `.grype.json` `.gitleaks.json` `.checkov.json` `.govulncheck.json` | raw tool output files → raw hit counts (supplement `raw_hits` in VULN-FINDINGS.json) | optional |
 
 ## Workflow
 
@@ -113,9 +115,11 @@ the run's JSON artifacts — do not hand-edit generated HTML.
 ## What the script owns vs. what you own
 
 - **Script (never hand-edit the HTML):** header meta cards, stats bar, the
-  Phase 2 hunt table, Phase 3 tallies/owner routing, patch cards, payload
-  cards, and the final ranked findings table — all from the JSON. Counts are
-  computed, not copied.
+  Phase 2 hunt table, **Phase 2 SAST Evidence section** (tool status grid +
+  per-tool collapsible finding tables, sourced from `VULN-FINDINGS.json`
+  `summary.tools` / `summary.raw_hits` / findings filtered by `source`),
+  Phase 3 tallies/owner routing, patch cards, payload cards, and the final
+  ranked findings table — all from the JSON. Counts are computed, not copied.
 - **You (via `narrative.json`):** the recon story, threat-model highlights,
   executive summary, and "what the codebase does well". Keep it faithful to the
   markdown artifacts.
