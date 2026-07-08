@@ -6,6 +6,7 @@
 #   grype        image/filesystem CVEs         https://github.com/anchore/grype
 #   gitleaks     secrets                       https://github.com/gitleaks/gitleaks
 #   checkov      IaC misconfig                 https://github.com/bridgecrewio/checkov
+#   govulncheck  Go vuln callgraph analysis    https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck
 #
 # Idempotent: skips anything already on PATH. Picks an installer per tool based
 # on what's available (pipx/pip, brew, go, or the vendor install script).
@@ -73,6 +74,15 @@ install_gitleaks() {
   else fail "gitleaks: install Go or Homebrew, or grab a release binary from https://github.com/gitleaks/gitleaks/releases"; return 1; fi
 }
 
+install_govulncheck() {
+  have govulncheck && { ok "govulncheck ($(govulncheck --version 2>/dev/null | head -1))"; return; }
+  miss "govulncheck — installing"
+  if have go; then
+    go install golang.org/x/vuln/cmd/govulncheck@latest
+    link_go_bin govulncheck
+  else fail "govulncheck: need Go installed (https://go.dev/dl/) — only needed for Go targets"; return 1; fi
+}
+
 # checkov is a Python tool. Prefer pipx/brew; otherwise install into the user
 # site, coping with PEP 668 ("externally-managed") environments that lack pip
 # and venv, then ensure a `checkov` shim exists on PATH (some such installs
@@ -98,7 +108,7 @@ install_checkov() {
   else fail "checkov: need pipx, brew, or python3"; return 1; fi
 }
 
-TOOLS="semgrep osv-scanner grype gitleaks checkov"
+TOOLS="semgrep osv-scanner grype gitleaks checkov govulncheck"
 
 echo "vuln-scan tool check (OS: $OS)"
 if [[ $CHECK_ONLY -eq 1 ]]; then
@@ -109,11 +119,12 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
 fi
 
 rc=0
-install_semgrep  || rc=1
-install_osv      || rc=1
-install_grype    || rc=1
-install_gitleaks || rc=1
-install_checkov  || rc=1
+install_semgrep     || rc=1
+install_osv         || rc=1
+install_grype       || rc=1
+install_gitleaks    || rc=1
+install_checkov     || rc=1
+install_govulncheck || rc=1  # no-op if Go not installed; only needed for Go targets
 
 echo
 echo "summary:"

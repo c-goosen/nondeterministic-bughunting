@@ -29,6 +29,7 @@ allowed-tools:
   - Bash(grype:*)
   - Bash(gitleaks:*)
   - Bash(checkov:*)
+  - Bash(govulncheck:*)
   - Bash(git remote:*)
   - Bash(rtk:*)
   - WebFetch
@@ -74,17 +75,18 @@ content into a shell interpreter.
 - `--no-score` — skip the Step 3b adversarial disprove pass (saves a round
   of subagents). Findings keep the hunt's self-reported confidence and carry
   no `disproof_attempt`.
-- `--no-semgrep` — skip **all** deterministic pre-scans (Steps 0–0e: semgrep,
-  osv-scanner, grype, gitleaks, checkov). Use when the tools are unavailable or
-  you want a purely LLM-driven pass.
+- `--no-semgrep` — skip **all** deterministic pre-scans (Steps 0–0g: semgrep,
+  osv-scanner, grype, gitleaks, checkov, govulncheck). Use when the tools are
+  unavailable or you want a purely LLM-driven pass.
 - `--no-gapfill` — skip the Step 2b coverage-gapfill round (the second hunt
   over files no focus area covered). Faster; leaves unscoped files unread.
 
 ## Setup — install the scanners (once)
 
-Steps 0–0e shell out to `semgrep`, `osv-scanner`, `grype`, `gitleaks`, and
-`checkov`. Each step degrades gracefully if its tool is missing, but to get the
-full deterministic layer install them once:
+The deterministic steps shell out to `semgrep`, `osv-scanner`, `grype`,
+`gitleaks`, `checkov`, and `govulncheck` (Steps 0–0e and 0g). Each degrades
+gracefully if its tool is missing, but to get the full deterministic layer
+install them once:
 
 ```
 bash .claude/skills/bughunt-vuln-scan/setup-tools.sh         # install what's missing
@@ -92,7 +94,7 @@ bash .claude/skills/bughunt-vuln-scan/setup-tools.sh --check # just report statu
 ```
 
 The script is idempotent and skips anything already on PATH. If you cannot
-install a tool, run with `--no-semgrep` to skip all three pre-scans.
+install a tool, run with `--no-semgrep` to skip all deterministic pre-scans.
 
 ## Step 0 — Deterministic pre-scan (semgrep)
 
@@ -312,10 +314,49 @@ remote on github.com.
    prose is LLM-written and advisory. Treat `SC-NNN` seeds exactly like the
    Step 0 semgrep `S-NNN` seeds — they bias focus-area selection (Step 1)
    and get handed to the matching subagent to confirm or refute (Step 2),
-   never auto-promoted to findings the way osv/grype/gitleaks/checkov are.
+   never auto-promoted to findings the way osv/grype/gitleaks/checkov and
+   reachable govulncheck hits are.
 
 Report whether Security Context was used and the lead count (if any) before
 moving on.
+
+### Step 0g — Go vulnerability check (govulncheck, only if Go is present)
+
+If the target is a Go module, run
+[govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck). Unlike
+osv-scanner (which matches lockfile versions against advisories), govulncheck
+does **callgraph analysis**: it reports only vulnerabilities in code paths the
+module actually calls, dramatically reducing noise. It reads source — it does
+not execute the target.
+
+Skip if `--no-semgrep` was given, if no `go.mod` exists in `<target-dir>`, or
+if govulncheck is not installed.
+
+1. **Detect.** Glob for `<target-dir>/go.mod`. If absent, skip. Run
+   `govulncheck --version`; if absent, note it, set `govulncheck_used=false`,
+   and continue.
+2. **Run from the module root:** `cd <target-dir> && govulncheck -json ./... >
+   <target-dir>/.govulncheck.json`. This resolves all packages and transitive
+   deps against the OSV database, then prunes to reachable call paths.
+3. **Parse `.govulncheck.json`** (JSON stream, one object per line). Per
+   `finding`: `osv` (OSV/CVE ID), `trace` (call stack — **non-empty ⇒
+   reachable**; empty ⇒ affected package imported but vulnerable symbol not
+   called), `fixed_version`; plus `osv.summary` / `osv.severity`. Normalize:
+   ```
+   G-001  <module>@<version>  <OSV-ID>  <severity>  <summary>  reachable=<true|false>
+   ```
+   Map OSV severity to this skill's scale; promote reachable hits one tier
+   (e.g. `MEDIUM → HIGH`) since a call path is confirmed.
+4. **Reachable findings** promote directly to findings —
+   `category: "known-vulnerable-dependency"`, `source: "govulncheck"`, same
+   treatment as osv/grype — with the call-stack summary in the description so
+   triage sees the entry point. **Non-reachable** ones become LOW seeds only
+   (inform focus areas, not auto-promoted; a subagent confirms reachability
+   before reporting).
+5. De-duplicate against osv-scanner on `(module, advisory-id)`; prefer the
+   govulncheck entry (its reachability verdict is more precise).
+
+Report the govulncheck count (reachable vs. non-reachable) before moving on.
 
 ## Step 1 — Scope
 
@@ -334,7 +375,9 @@ moving on.
    semgrep seed falls inside some focus area so a subagent will examine it.
    Do the same for any `SC-NNN` Security Context leads from Step 0f — a
    repo's own recurring-weak-spot history is a strong prior for where the
-   next bug is.
+   next bug is — and for any **non-reachable** `G-NNN` govulncheck seeds
+   (reachable ones already promoted straight to findings in Step 0g), so a
+   subagent confirms or rules out reachability.
 
 Tell the user the focus areas you'll scan and the source-file count before
 fanning out.
@@ -664,9 +707,9 @@ Tell the user:
   PoC," decline and point at `vuln-pipeline`.
 - **The only Bash allowed** is the read-only enumeration/search set (`rg`,
   `grep`, `find`, `ls`, `wc`, `head`, `file`, and their `rtk`-proxied form
-  when that hook is active), the five deterministic static scanners
-  (`semgrep`, `osv-scanner`, `grype`, `gitleaks`, `checkov`), and
-  `git remote` (to detect a GitHub origin for Step 0f). These analyze
+  when that hook is active), the six deterministic static scanners
+  (`semgrep`, `osv-scanner`, `grype`, `gitleaks`, `checkov`, `govulncheck`),
+  and `git remote` (to detect a GitHub origin for Step 0f). These analyze
   source, manifests, image metadata, and config — they do not execute the
   target. The scanners and the Step 0f WebFetch may reach the network for
   advisory/rule/history data (that is reference data about the ecosystem or
@@ -691,18 +734,20 @@ exclusions, per-finding confidence pass, and
 [`anthropics/claude-code-security-review`](https://github.com/anthropics/claude-code-security-review)'s
 `/security-review` command.
 
-The deterministic pre-scan layer (Steps 0–0e) was added for this repo and
-wraps five external open-source scanners, each run read-only:
+The deterministic pre-scan layer (Steps 0–0e and 0g) was added for this repo
+and wraps six external open-source scanners, each run read-only:
 [semgrep](https://github.com/semgrep/semgrep) (pattern-based SAST),
 [osv-scanner](https://github.com/google/osv-scanner) (OSV.dev dependency
 advisories), [grype](https://github.com/anchore/grype) (container
 image / filesystem CVEs, gated on a Dockerfile),
-[gitleaks](https://github.com/gitleaks/gitleaks) (secrets, always-on), and
+[gitleaks](https://github.com/gitleaks/gitleaks) (secrets, always-on),
 [checkov](https://github.com/bridgecrewio/checkov) (IaC misconfig, gated on
-infrastructure code). Install them with [`setup-tools.sh`](setup-tools.sh) in
-this skill directory.
+infrastructure code), and
+[govulncheck](https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck) (Go
+callgraph-reachable dependency CVEs, gated on a `go.mod`). Install them with
+[`setup-tools.sh`](setup-tools.sh) in this skill directory.
 
-Step 0f adds a sixth, hosted source: [Security Context](https://securitycontext.dev)
+Step 0f adds a hosted source: [Security Context](https://securitycontext.dev)
 (`securitycontext.dev`), a free API/MCP service that mines a public GitHub
 repo's real fix-commit history and disclosed CVEs into recurring weak spots
 and ranked variant leads. It requires no auth, is gated to public
